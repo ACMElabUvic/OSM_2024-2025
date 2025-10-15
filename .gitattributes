@@ -1,0 +1,2 @@
+* !text !filter !merge !diff
+data/processed/OSM_timelapse_2021-2024.csv filter=lfs diff=lfs merge=lfs -text
