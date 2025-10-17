@@ -1,0 +1,664 @@
+---
+title: "Format covariates"
+author: "Aidan Brushett"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: default
+    toc: yes
+    toc_float: yes
+---
+
+# Before you begin
+
+Aidan Brushett
+Ph.D. Student
+University of Victoria    
+School of Environmental Studies     
+Email: [aidanbrushett@uvic.ca](aidanbrushett@uvic.ca)
+
+---------
+
+# 0. Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(sf)
+library(tidyverse)
+library(leaflet)
+library(leaflet.extras)
+library(htmlwidgets)
+rm(list=ls())
+```
+
+
+# 1. Import all covariate data
+
+```{r message=FALSE}
+# Old code to fix everything
+#bind_rows(read_csv("./data/output/OSM_SBFI2020_site_covariates.csv"),
+#          read_csv("./data/output/OSM_SBFI2020_site_covariates10000.csv")) %>%
+#  
+#  write_csv(., file = "./data/output/OSM_SBFI2020_site_covariates.csv")
+
+
+hfi <- bind_rows(read_csv("./data/raw/OSM_HFI2021_site_covariates.csv"),
+                 read_csv("./data/raw/OSM_HFI2022_site_covariates.csv"))
+
+sbfi <- bind_rows(read_csv("./data/raw/OSM_SBFI2020_site_covariates.csv")) %>%
+  
+  select(-lat, -long)
+
+setdiff(sbfi$site, hfi$site)
+
+# Read in the site/year combos. 
+osm_site_year <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv") %>%
+  
+  mutate(array_year = year(start_date)) %>%
+  
+  select(site, array_year)
+```
+
+Some 'control' sites didn't extract in the HFI because they have exactly 0 disturbance. Crazy! Let's manually add them here using the SBFI as a reference.
+
+```{r}
+hfi <- hfi %>%
+  
+  complete(site = sbfi$site, buffer_dist) %>%
+  # Remove array
+  select(-array) %>%
+  # Add the correct array from the SBFI data (fixes NAs for the new sites)
+  left_join(distinct(sbfi[1:2]), by = "site") %>%
+  # Put array as first column
+  relocate(array) %>%
+
+  # Fill in the NA covariates that should be 0s. 
+  mutate(across(4:last_col(), ~replace_na(., 0))) %>%
+  
+  # Manual fix since this column was weirdly a duplicate.
+  # Combine the two columns and remove the one with hyphens.
+  # Without this step, the next step throws an error. 
+  mutate(WELL_CLEARED_NOT_DRILLED = rowSums(across(any_of(c(
+    'WELL_CLEARED_NOT_DRILLED',
+    'WELL-CLEARED-NOT-DRILLED'
+  ))))
+  ) %>%
+  
+  select(-contains('WELL-CLEARED-NOT-DRILLED'))
+
+```
+
+# 2. Tidy up the HFI data
+
+## 2.1. Initial cleaning, add the sample year column
+
+This is a bit janky because of the repeat samples... will want to find a better solution next year. 
+
+```{r}
+hfi <- hfi %>%
+  
+  set_names(tolower(names(.)) %>%
+              str_replace_all(., pattern = c('-'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_') %>%  # what you want the pattern to be replaced with
+              str_replace_all(., pattern = c('\\.'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_')
+            ) %>%
+
+  # What year were the arrays sampled? Used to determine recent fire and burns.
+  # Currently, left joined from the deployment data frame
+  left_join(osm_site_year, by = "site") #%>%
+  
+  # Old code from merging the ancestral arrays
+  #mutate(array_year = case_when(
+  #    array %in% c("WF1", "WF2", "RC") ~ 2018,
+  #    array %in% c("CL") ~ 2011)
+  #  )
+```
+
+```{r}
+names(hfi)
+```
+
+## 1.2. Group the HFI data
+
+We will follow the convention used by Marissa Dyck, ABMI, etc. to group variables. This code is nice and robust to whether a column is present in the data or not. 
+
+```{r format covs}
+hfi_grouped <- hfi %>% 
+  
+  # rename 'vegetated_edge_roads' so that we can use 'road' as keyword to group roads without including this feature
+  rename(vegetated_edge_rds = vegetated_edge_roads) %>%
+  
+  mutate(
+    # borrowpits
+    borrowpits = rowSums(across(any_of(c(
+      grep("borrowpit", names(.), value = TRUE),
+      'dugout', 
+      'lagoon', 
+      'sump'
+    )))),
+    
+    # clearings
+    clearings = rowSums(across(any_of(c(
+      grep("clearing", names(.), value = TRUE),
+      'runway'
+    )))),
+    
+    # cultivations
+    cultivation = rowSums(across(any_of(c(
+      'crop', 
+      'cultivation_abandoned', 
+      'fruit_vegetables',
+      'rough_pasture', 
+      'tame_pasture'
+    )))),
+    
+    # industrial facilities
+    facilities = rowSums(across(any_of(c(
+      grep("facility", names(.), value = TRUE),
+      grep("plant", names(.), value = TRUE),
+      'camp_industrial', 
+      'urban_industrial',
+      'mill', 
+      'ris_camp_industrial', 
+      'ris_tank_farm', 
+      'ris_utilities'
+    )))),
+    
+    # harvest areas
+    harvest_total = rowSums(across(contains('harvest_area'))),
+    
+    # mine areas
+    mines = rowSums(across(any_of(c(
+      grep("mine", names(.), value = TRUE),
+      grep("tailing", names(.), value = TRUE),
+      'grvl_sand_pit', 
+      'peat', 
+      'ris_drainage', 
+      'ris_oilsands_rms',
+      'ris_overburden_dump', 
+      'ris_reclaim_ready', 
+      'ris_soil_salvaged', 
+      'ris_waste'
+    )))),
+    
+    # railways
+    railways = rowSums(across(any_of(grep("rlwy", names(.), value = TRUE)))),
+    
+    # reclaimed areas
+    reclaimed = rowSums(across(any_of(c(
+      grep("reclaimed", names(.), value = TRUE),
+      'ris_soil_replaced', 
+      'ris_windrow'
+    )))),
+    
+    # recreation areas
+    recreation = rowSums(across(any_of(c(
+      'campground', 
+      'golfcourse', 
+      'greenspace', 
+      'recreation'
+    )))),
+    
+    # residential areas
+    residential = rowSums(across(any_of(c(
+      'country_residence', 
+      'rural_residence', 
+      'urban_residence'
+    )))),
+    
+    # roads
+    roads = rowSums(across(any_of(c(
+      grep("road", names(.), value = TRUE),
+      'transfer_station', 
+      'interchange_ramp', 
+      'airp_runway', 
+      'ris_airp_runway'
+    )))),
+    
+    # seismic lines
+    seismic_lines_conventional = rowSums(across(any_of(c(
+      'conventional_seismic',
+      'pre_low_impact_seismic'
+    )))),
+    
+    # 3D seismic lines
+    seismic_lines_3D = low_impact_seismic,
+    
+    # transmission lines
+    transmission_lines = rowSums(across(any_of(c(
+      grep("transmission", names(.), value = TRUE)
+    )))),
+    
+    # trails
+    trails = rowSums(across(any_of(c(
+      grep("trail", names(.), value = TRUE)
+    )))),
+    
+    # vegetated edges
+    veg_edges = rowSums(across(any_of(c(
+      grep("vegetated", names(.), value = TRUE),
+      'surrounding_veg'
+    )))),
+    
+    # man-made water features
+    water = rowSums(across(any_of(c(
+      'canal', 
+      'reservoir'
+    )))),
+    
+    # well sites
+    wells_total = rowSums(across(any_of(c(
+      grep("well", names(.), value = TRUE)
+    )))),
+    
+    # inactive well sites
+    wells_inactive = rowSums(across(any_of(c(
+      "well_aband"
+    )))),
+    
+    wells_active = rowSums(across(any_of(c(
+      'well_bitumen', 
+      'well_bit',
+      'well_gas', 
+      'well_oil', 
+      'well_cased',
+      "well_cleared_not_confirmed", 
+      "well_cleared_not_drilled",
+      "well_cleared_drilled",
+      "well_drilled_other",
+      "ris_well",
+      "well_other", 
+      "well_unknown"
+    )))),
+    
+    # remove columns that were used to create new columns to tidy the data frame
+    .keep = 'unused'
+  ) %>%
+  
+  # reorder alphabetically except array, site and buff_dist
+  select(order(colnames(.))) %>% 
+  
+  # move the columns that aren't HFI features or landcover to the front
+  relocate(array, site, buffer_dist, array_year) %>% 
+  
+  # reorder variables so the veg data is after all the HFI data
+  relocate(starts_with('lc_class'), .after = wells_active)
+```
+
+## 1.3. Group the harvest data by year
+
+```{r}
+# Now compute row-wise harvest_0_15 and harvest_gt_15
+# Loop through the sample years. This is the most efficient code I could find. 
+# We want to sum the white zone AND green zone harvest for this. 
+# Instead of renaming the columns, this should do the trick.
+hfi_harvest <- purrr::map_dfr(unique(hfi$array_year), ~{
+
+  # Columns to sum (based on fire year and sample year)
+  cols_0_15 <- c(paste0("harvest_area_", seq(.x - 14, .x)),
+                 paste0("harvest_area_white_zone_", seq(.x - 14, .x)))
+                 
+  cols_gt_15 <- c(paste0("harvest_area_", seq(1900, .x - 15)),
+                  paste0("harvest_area_white_zone_", seq(1900, .x - 15)))
+  
+  # Establishment stage
+  cols_10_25 <- c(paste0("harvest_area_", seq(.x - 24, .x - 10)),
+                  paste0("harvest_area_white_zone_", seq(.x - 24, .x - 10)))
+  
+  # Aggrandation phase
+  cols_gt_25 <- c(paste0("harvest_area_", seq(1900, .x - 25)),
+                  paste0("harvest_area_white_zone_", seq(1900, .x - 25)))
+  
+  # By decade
+  cols_0_10 <- c(paste0("harvest_area_", seq(.x - 9, .x)),
+                 paste0("harvest_area_white_zone_", seq(.x - 9, .x)))
+  
+  cols_10_20 <- c(paste0("harvest_area_", seq(.x - 19, .x - 10)),
+                  paste0("harvest_area_white_zone_", seq(.x - 19, .x - 10)))
+  
+  cols_20_30 <- c(paste0("harvest_area_", seq(.x - 29, .x - 20)),
+                  paste0("harvest_area_white_zone_", seq(.x - 29, .x - 20)))
+  
+  cols_30_40 <- c(paste0("harvest_area_", seq(.x - 39, .x - 30)),
+                  paste0("harvest_area_white_zone_", seq(.x - 39, .x - 30)))
+  
+  cols_gt_40 <- c(paste0("harvest_area_", seq(1900, .x - 40)),
+                  paste0("harvest_area_white_zone_", seq(1900, .x - 40)))
+
+  
+  hfi %>%
+    filter(array_year == .x) %>%
+    mutate(
+      
+      # Sum them
+      harvest_0_15 = rowSums(across(any_of(
+        cols_0_15
+      ))),
+      
+      harvest_gt_15 = rowSums(across(any_of(
+        cols_gt_15
+      ))),
+      
+      harvest_gt_25 = rowSums(across(any_of(
+        cols_gt_25
+      ))),
+      
+      harvest_0_10 = rowSums(across(any_of(
+        cols_0_10
+      ))),
+      
+      harvest_10_25 = rowSums(across(any_of(
+        cols_10_25
+      ))),
+      
+      harvest_10_20 = rowSums(across(any_of(
+        cols_10_20
+      ))),
+      harvest_20_30 = rowSums(across(any_of(
+        cols_20_30
+      ))),
+      harvest_30_40 = rowSums(across(any_of(
+        cols_30_40
+      ))),
+      harvest_gt_40 = rowSums(across(any_of(
+        cols_gt_40
+      )))
+      
+    ) %>%
+    
+  # move the columns that aren't HFI features or landcover to the front
+  select(array, site, buffer_dist, array_year, 
+         harvest_0_15, 
+         harvest_gt_15,
+         
+         harvest_0_10,
+         harvest_10_25,
+         harvest_gt_25,
+         
+         harvest_10_20,
+         harvest_20_30,
+         harvest_30_40,
+         harvest_gt_40)
+    
+  }
+  )
+```
+
+## 1.4. Add the harvest and do some additional grouping
+
+```{r}
+hfi_final <- hfi_grouped %>% 
+  
+  left_join(hfi_harvest, by = c("array", "site", "buffer_dist", "array_year")) %>%
+
+  mutate(
+    # create column osm_industrial following Marissa's convention
+    osm_industrial = 
+      borrowpits +
+      clearings +
+      facilities +
+      mines,
+    
+    # Lump popeline and transmission line
+    pipe_trans =
+      pipeline +
+      transmission_lines,
+    
+    # Lump seismic
+    seismic_total = 
+      seismic_lines_conventional + 
+      seismic_lines_3D,
+    
+    # Cumulative site disturbance without harvest
+    cfi =
+      osm_industrial +
+      wells_total + 
+      seismic_total + 
+      pipe_trans +
+      trails +
+      roads + 
+      railways,
+    
+    # Cumulative site disturbance with veg edges
+    cfi_with_vegedges = 
+      cfi + 
+      veg_edges,
+    
+        # Cumulative site disturbance with harvest
+    cfi_with_harvest = 
+      cfi_with_vegedges + 
+      harvest_0_15,
+
+    ) %>%
+  
+  # remove other features we don't need
+  select(!any_of(c(
+    'cfo',
+    'cultivation',
+    'reclaimed',
+    'recreation',
+    'residential',
+    'water',
+    'borrowpits',
+    'clearings',
+    'facilities',
+    'mines',
+    'pipeline',
+    'transmission_lines',
+    'landfills',
+    'other_linear_features',
+    'woody_vegetation_removal'
+  ))) %>%
+  
+  relocate(array, site, buffer_dist, array_year, sort(names(.)))
+
+names(hfi_final)
+```
+
+Looks good!!
+
+# 3. Tidy up the forest inventory data
+
+## 3.1. Clean up and add sample year column
+
+```{r}
+sbfi <- sbfi %>%
+  
+  set_names(tolower(names(.)) %>%
+              str_replace_all(., pattern = c('-'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_') %>%  # what you want the pattern to be replaced with
+              str_replace_all(., pattern = c('\\.'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_')
+            ) %>%
+
+  # What year were the arrays sampled? Used to determine recent fire and burns.
+  # Currently, left joined from the deployment data frame
+  left_join(osm_site_year, by = "site") %>%
+  
+  # Old code from merging the ancestral arrays
+  #mutate(array_year = case_when(
+  #    array %in% c("WF1", "WF2", "RC") ~ 2018,
+  #    array %in% c("CL") ~ 2011)
+  #  )
+  
+  mutate(
+    # fire
+    fire_total = rowSums(across(contains('fire_pct')))
+    )
+
+  
+names(sbfi)
+```
+
+## 3.2. Calculate fire by year columns
+
+```{r}
+# Now compute row-wise fire_0_15 and fire_gt_15
+# Loop through the sample years. This is the most efficient code I could find. 
+sbfi_fire <- purrr::map_dfr(unique(sbfi$array_year), ~{
+  
+  # Columns to sum (based on fire year and sample year)
+  cols_0_15 <- paste0("fire_pct_", seq(.x - 14, .x))
+  cols_gt_15 <- paste0("fire_pct_", seq(1900, .x - 15))
+  
+  # By decade
+  cols_0_10 <- paste0("fire_pct_", seq(.x - 9, .x))
+  cols_10_20 <- paste0("fire_pct_", seq(.x - 19, .x - 10))
+  cols_20_30 <- paste0("fire_pct_", seq(.x - 29, .x - 20))
+  cols_30_40 <- paste0("fire_pct_", seq(.x - 39, .x - 30))
+  cols_gt_40 <- paste0("fire_pct_", seq(1900, .x - 40))
+  
+  # Establishment and aggrandization stages:
+  cols_10_25 <- paste0("fire_pct_", seq(.x - 24, .x - 10))
+  cols_gt_25 <- paste0("fire_pct_", seq(1900, .x - 25))
+
+
+  sbfi %>%
+    filter(array_year == .x) %>%
+    mutate(
+      
+      # Sum them
+      fire_0_15 = rowSums(across(any_of(
+        cols_0_15
+      ))),
+      
+      fire_gt_15 = rowSums(across(any_of(
+        cols_gt_15
+      ))),
+      
+      fire_gt_25 = rowSums(across(any_of(
+        cols_gt_25
+      ))),
+      
+      fire_10_25 = rowSums(across(any_of(
+        cols_10_25
+      ))),
+      
+      fire_0_10 = rowSums(across(any_of(
+        cols_0_10
+      ))),
+      fire_10_20 = rowSums(across(any_of(
+        cols_10_20
+      ))),
+      fire_20_30 = rowSums(across(any_of(
+        cols_20_30
+      ))),
+      fire_30_40 = rowSums(across(any_of(
+        cols_30_40
+      ))),
+      fire_gt_40 = rowSums(across(any_of(
+        cols_gt_40
+      )))
+      
+    ) %>%
+    
+  # move the columns that aren't HFI features or landcover to the front
+  select(array, site, buffer_dist, array_year, 
+         fire_0_15, 
+         fire_gt_15,
+         fire_0_10,
+         fire_10_25,
+         fire_gt_25,
+         fire_10_20,
+         fire_20_30,
+         fire_30_40,
+         fire_gt_40)
+  }
+  )
+```
+
+## 3.3. Finalize and give the species a more meaningful name
+
+```{r}
+sbfi_final <- sbfi %>% 
+  
+  # Some columns we don't want
+  select(-contains("fire"),
+         -contains("age"), 
+         -lc_rock_rubble,
+         -lc_snow_ice,
+         -lc_bryoids,
+         -lc_exposed_barren,
+         # We'll get harvest from the ABMI data instead
+         -contains("harvest"),
+         # We DO want fire total though. Overrides previous removal.
+         fire_total) %>%
+  
+  # Join the fire data
+  left_join(sbfi_fire, by = c("array", "site", "buffer_dist", "array_year")) %>%
+
+  relocate(array, site, buffer_dist, array_year, sort(names(.))) %>%
+  
+  # Nicer species column names
+  rename_with(
+    ~ paste0("pct_", str_remove(., "_pct_of_treed")),
+    .cols = contains("_pct_of_treed")
+  )
+
+names(sbfi_final)
+```
+
+
+
+# 5. Put it all together:
+
+## 5.1. Import lat/long and UTM 12N coordinates
+
+```{r}
+# Clean up this similar, old file
+rm(osm_site_year)
+
+# read in the 'site coordinate' files. Purrr works for now. 
+coords <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv")
+``` 
+
+## 5.2. Append everything and final inspection
+
+```{r}
+# Tidy up and final check
+covs <- hfi_final %>%
+  
+  left_join(sbfi_final, by = c("array", "site", "buffer_dist", "array_year")) %>%
+
+  left_join(coords, by = c('array', 'site')) %>%
+  
+  relocate(array, site, array_year, start_date, end_date, lat, long, easting_12n, northing_12n, buffer_dist) %>%
+  
+  # Remove some columns. Should have been done in an earlier step but just noticed it now...
+  select(-camera_failure_details, -deployment_id)
+
+summary(covs)
+head(covs)
+```
+
+Also append the NDVI:
+
+```{r}
+ndvi <- read_csv("./data/raw/OSM_MODISNDVI_site_covariates.csv")
+
+covs <- covs %>%
+  
+  left_join(ndvi, by = c("site", "array", "buffer_dist", "lat", "long")) %>%
+  
+  # Remove some columns. Should have been done in an earlier step but just noticed it now...
+  select(-camera_failure_details, -deployment_id)
+```
+
+
+## 5.4. Save the data:
+
+```{r}
+write_csv(covs, "./data/processed/OSM_site_covariates_2021-2024.csv")
+```
+
+
+
+End script
+
+
+
+

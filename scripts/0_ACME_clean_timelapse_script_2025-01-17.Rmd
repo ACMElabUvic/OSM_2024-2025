@@ -1,0 +1,1238 @@
+---
+title: "ACME Timelapse Image Processing and Error Checking"
+author: "Aidan Brushett"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: default
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+# 0. Before you begin
+
+## 0.1. Notes
+
+A few notes about this script. The Markdown version is set to eval=FALSE for ALL chunks to help with knitting speed. This script is modular and it's meant to be run in sections. It could be considered more of a toolkit/workbook then a top-to-bottom script. Unless your dataset is 100% clean, it is unlikely that you will ever run it top to bottom. Remove the global `opts_chunk$set` settings if you would like to see script outputs in the knitted document. 
+
+If you are running this with the 2023-2024 data make sure you download the whole (OSM_2023-2024 GitHub repository)[https://github.com/ACMElabUvic/OSM_2023-2024] from the ACMElabUvic GitHub. This will ensure you have all the files, data, and proper folder structure you will need to run this code and associated analyses.
+
+Also make sure you open RStudio through the R project (OSM_2023-2024.Rproj) this will automatically set your working directory to the correct place (wherever you saved the repository) and ensure you don't have to change the file paths for some of the data. In the *Global Options* of your RStudio, ensure chunks are set to run in the *project directory*, not the *default.* 
+
+If you have question please email the most recent author, currently   
+
+Aidan Brushett
+M.Sc. Student
+University of Victoria    
+School of Environmental Studies     
+Email: [aidanbrushett@uvic.ca](aidanbrushett@uvic.ca)     
+
+## Netdrive access
+
+This script relies on the user having access to the ACME lab Netdrive (you can view the .html output of this file if you don't have access and just want to see what the script did).
+
+Helpful instructions for connecting to and navigating the Netdrive can also be found here: [https://docs.google.com/document/d/1Z72IrlIXO8MUHCoVztcMrMdL10R2tHrHThEgfow1Cu0/edit ](https://docs.google.com/document/d/1Z72IrlIXO8MUHCoVztcMrMdL10R2tHrHThEgfow1Cu0/edit).
+
+***
+
+# 1. Set up workspace
+
+## 1.1. Install packages
+
+If you don't already have the following packages installed, use the code below to install them. *NOTE this will not run automatically as eval=FALSE is included in the chunk setup (i.e. I don't want it to run everytime I run this code since I have the packages installed)
+
+```{r install, eval=FALSE}
+install.packages("tidyverse") 
+install.packages("withr") 
+install.packages("writexl")
+install.packages("RSQLite")
+install.packages("fs")
+install.packages("crayon")
+install.packages("magick")
+```
+
+## 1.2. Load libraries
+
+And a couple custom functions that can help with masking issues from package loading:
+
+```{r libraries, message=FALSE, warning=FALSE}
+rm(list=ls()) # clear environment
+
+
+library(tidyverse) # data tidying, visualization, and much more; this will load all tidyverse packages, can see complete list using tidyverse_packages()
+library(withr) # used to temporarily set wd
+library(RSQLite) # used to access timelapse data stored in ddb files
+library(ggplot2) # pretty plots
+library(crayon) # custom color for warning messages. Aesthetic only.
+library(writexl) # writing error check spreadsheets as an excel sheet so formatting sticks
+library(fs) # for writing and copying files and directories
+library(magick) # for blurring or manipulating images
+
+# These are functions that can sometimes get masked by other packages. Shouldn't be an issue and could be removed.
+select <- dplyr::select
+filter <- dplyr::filter
+summarize <- dplyr::summarize
+# Cheeky function that means "not in"
+`%nin%` = Negate(`%in%`)
+
+```
+
+## 1.3. Script parameters
+
+The ACME netdrive location varies between Apple/Windows users, and between Windows users depending on how they mapped their drive. Specify that (as well as some other parameters) here before running the script. 
+
+```{r script_parameters}
+my_netdrive <- 'Z:/1.Resources/2.Arrays/Alberta/OSM/2023-2024' # the path to the netdrive on your device
+
+# Do you want to automatically append a blank noon photo (with snow) at sites where noon photos are missing? See Section 5.  
+autofix_one_image_per_day <- TRUE
+interpolate_snow <- FALSE
+
+# Do you want to blur human use images at the end of the script? This step is currently not used and stored in the Appendix. 
+blur_human_use <- FALSE
+```
+
+***
+
+# 2. Deployment data
+
+## 2.1. Read in and reformat the deployment data. 
+
+```{r}
+with_dir(new = my_netdrive,
+  
+  OSM_2023_deploy_raw <- read_csv('./4. Deployment Data/OSM_2023_Deployment_Data.csv',
+                     
+                     # specify how we want the columns read in 
+                     col_types = cols(Project.ID = col_factor(),
+                                      Deployment.Location.ID = col_factor(),
+                                      Camera.Deployment.Begin.Date = col_date(
+                                        format = "%d-%b-%y"),
+                                      Camera.Deployment.End.Date = col_date(
+                                        format = "%d-%b-%y"),
+                                      .default = col_character())) %>% 
+                     # the date columns could be read in as such if we needed but I don't think we use them and the date format is odd to get R to read
+    
+    # set the column names to lower case and replace the '.' with '_' (these are both personal preferences of mine)
+    set_names(
+      names(.) %>% 
+        tolower() %>% 
+        
+        # replace the '.' with '_'
+        str_replace_all(pattern = '\\.', # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                        replacement = '_')) %>%  # what you want the pattern to be replaced with
+    
+    # rename start and end date so they are shorter
+    # rename project_id and deployment_location_id so they match previous years' columns
+    rename(start_date = camera_deployment_begin_date,
+           end_date = camera_deployment_end_date,
+           array = project_id,
+           site = deployment_location_id) %>%
+    
+    mutate(array = str_remove(array, pattern = "OSM_"), # remove prefix OSM from array
+           site = gsub("-", "_", site) %>% # First, replace the hyphen with underscore
+            gsub("_0+", "_", .) %>% # Then, remove leading zeros after the underscore
+             gsub(" ", "", .) %>% # Then, remove any spaces
+            as.factor(.) # Then, convert back to factor
+           ) %>%
+
+    select(!c(deployment_id)) # remove columns we don't need. We will keep the camera_failure_details since it helps verify errors later on
+
+)
+```
+
+## 2.2. Inspect the deployment data. 
+
+**This information should be accurate before importing Timelapse data**. Later, we will check whether the dates of our Timelapse data match with the dates of our deployments. When they do not match, errors could be in the Timelapse data *or* they could be in the deployment sheet. Verifying the deployment sheet's accuracy now will save you some time later ;)
+
+```{r inspect}
+# check data
+head(OSM_2023_deploy_raw)
+
+# check levels of site name
+levels(OSM_2023_deploy_raw$site)
+
+# create graph of camera operability
+ggplot(OSM_2023_deploy_raw, aes(color = array))+
+  
+  geom_segment(aes(x = start_date, 
+                   xend = end_date,
+                   y = site, 
+                   yend = site)) +
+  
+  theme(axis.text = element_text(size = 6))
+```
+
+## 2.3. Fix the deployment data as needed and re-inspect
+
+```{r fix}
+OSM_2023_deploy <- OSM_2023_deploy_raw %>% 
+  
+  # rename site entries (as needed) 
+  mutate(site = as.factor(case_when(site == 'LU15-44' ~ 'LU15_44',
+                                    site == 'LI15_03' ~ 'LU15_03',
+                                    TRUE  ~ site))#,
+#         start_date = as.Date(case_when(site == 'LU22_25' ~ '2023-09-19'),
+#                              TRUE ~ start_date),
+#         end_date = as.Date(case_when(site == 'LU22_25' ~ '2024-09-06'),
+#                            TRUE ~ end_date)
+  )
+
+# check data
+summary(OSM_2023_deploy)
+
+# check levels of site name
+levels(OSM_2023_deploy$site)
+
+# create graph of camera operability
+ggplot(OSM_2023_deploy, aes(color = array)) +
+  
+  geom_segment(aes(x = start_date, 
+                   xend = end_date,
+                   y = site, 
+                   yend = site)) +
+  
+  theme(axis.text = element_text(size = 6))
+```
+
+## 2.4. Export the cleaned deployment data
+
+Now that this data is cleaned up we should save it to the data/processed folder in case we need the cleaned version later so we don't have to repeat the above steps.
+
+```{r export}
+write_csv(OSM_2023_deploy,
+          './data/processed/OSM_deployment_2023.csv')
+
+rm(OSM_2023_deploy_raw)
+```
+
+## 2.5. If running the script in steps: re-import the deployment data
+
+> Set to eval=FALSE as default. Run this manually in your console if you're running the script in multiple steps or over multiple days. 
+
+```{r reimport, eval=FALSE}
+OSM_2023_deploy <- read_csv('data/processed/OSM_deployment-dates_2023.csv') %>% 
+  # make sure site re-reads in as a factor to compare with other data sets
+  mutate(site = as.factor(site))
+```
+
+***
+
+# 3. Import Timelapse data
+
+## 3.1. Identify *.ddb* files to be imported. 
+
+First, we need to temporarily set your working drive to the ACME lab Netdrive to import the Timelapse data files (there are too many to efficiently store on GitHub or GoogleDrive each year). We will use the `with_dir()` function in the *withr* package to do this.
+
+**As of 2024: .csv files are not used for any step of data importing or processing to prevent user errors.** The Timelapse2 *.ddb* files are actually just SQLite databases with a different file extension! Anything you tag is automatically stored in the .ddb file's *datatable*, which we will access later to retrieve image data. The code below will identify all the files with a .ddb extension from any subfolder/s within the main folder provided in the `path =` argument. I have also specified for it to ignore certain subfolders (e.g. backups). Then it will name each file based on the base name of the .ddb file.
+
+This only works to import the timelapse .ddb files **if** they are found within the subfolders of the main path folder, and there aren't extraneous files with a .ddb extension that we don't want to import. **Ensure nobody has a Quickpaste file stored in *1. Imagery*, with the exception of the *1. Imagery/Quickpaste/* directory.**
+If the Netdrive folder structure changes in future years this code *may* not work or *may* need to be adapted to ignore additional subfolders.
+
+```{r find, eval=FALSE}
+# temporarily set the working directory to import from the NetDrive
+with_dir(new = my_netdrive,
+         
+# make a list of the .csv file names from the sub-folders within the '1. Imagery/OSM_2022_LU01' folder
+OSM_2023_timelapse_ddb_files <- list.files(
+  path = '1. Imagery',
+  recursive = TRUE,
+  pattern = "\\.*ddb$",
+  full.names = TRUE
+  ) %>% 
+
+  
+  # exclude files from backups sub-folders
+  stringr::str_subset(.,
+                      'Backups',
+                      negate = TRUE) %>%
+  # and exclude anyone's quickpaste files
+  stringr::str_subset(.,
+                      'Quickpaste',
+                      negate = TRUE)
+)
+
+# Save the list. This way, you do not need to repeat this step every time you re-check for errors. 
+save(OSM_2023_timelapse_ddb_files, file="./data/raw/OSM_2023_timelapse_ddb_files.Rdata")
+```
+
+> This takes a while to run because R is looking in every sub-folder at every file to see if it matches the extension (i.e. .csv) and then saving the file name and path and then going back and removing the files from the 'backups' sub-folders. Maybe not the most elegant way to do this but beats having to manually copy and paste each file individually.
+
+## 3.2. If running the script in steps: re-import the .ddb source list
+
+Remember: this is only a SNAPSHOT of the .ddb files in the Imagery folder, and could be outdated if it's been a while since you ran the chunk above this one (e.g., somebody classifies a new folder). Make sure you re-run the `list.files()` function in the chunk above if you suspect there are new Timelapse files, or if their directory has changed. 
+```{r re-import ddb list, eval=FALSE}
+load("./data/raw/OSM_2023_timelapse_ddb_files.Rdata")
+```
+
+## 3.3. Custom function to import .ddb files
+
+This function is written to perform several key tasks. **As of 2024, Start/End tags for *event* are added automatically to prevent user errors.**
+
+- imports and formats the 'datatable' in each .ddb file.  
+- automatically applies the Start/End tags.
+- attempts to standardize site names by converting dashes to underscores, and removing leading zeroes. If site names are particularly f**ed up, they might need manual fixing. 
+
+All the .ddb files are named identically during tagging; throughout this script we will keep track of the data source of each Timelapse entry using the *datasource* and *fullpath* columns. 
+
+> This code chunk only defines the function used to import the data-- no importing is actually performed in this step.
+
+```{r import ddb files - function ONLY}
+process_ddb_file <- function(ddb_file) {
+  
+  # connect to the .ddb file
+  db <- dbConnect(RSQLite::SQLite(), dbname = ddb_file)
+  
+  # extract the datatable from the .ddb database. The internal structure of these is quite cool. 
+  ddb_raw <- dbReadTable(db, "DataTable") %>%
+    
+    as_tibble() %>%
+    
+    # specify how you want to read in each column.
+    type_convert(., col_types = cols(RootFolder = col_character(),
+                                     File = col_character(),
+                                     RelativePath = col_character(),
+                                     Dark = col_logical(),
+                                     DeleteFlag = col_logical(),
+                                     Site = col_factor(),
+                                     Classifier = col_factor(),
+                                     Snow = col_factor(),
+                                     Species = col_factor(),
+                                     Event = col_character(),
+                                     Empty = col_logical(),
+                                     CoatColour = col_character(),
+                                     CameraMalfunction = col_factor(),
+                                     OtherSpecify = col_character(),
+                                     Comments = col_character(),
+                                     Noteworthy = col_logical(),
+                                     DateTime = col_datetime(format = "%Y-%m-%d %H:%M:%S"),
+                                     LeftAntler = col_factor(),
+                                     RightAntler = col_factor(),
+                                     LCount = col_factor(),
+                                     RCount = col_factor(),
+                                     .default = col_integer()),
+                 trim_ws = TRUE # timelapse sometimes adds leading spaces, especially to the datetime column. We want these gone from everything. 
+                 ) %>%
+    
+    # Lowercase names
+    set_names(names(.) %>%
+                tolower()) %>%
+    
+    # Create the fullpath and datasource columns, which we will use to keep track of where image data originally came from. 
+    mutate(fullpath = paste0(dirname(ddb_file), "/",
+                             ifelse(is.na(relativepath), "", paste0(relativepath, "/")), 
+                             file),
+           datasource = ddb_file
+           ) %>%
+    
+
+    # now that we've done some basic checks, automatically apply the "Start" and "End" tags. 
+    mutate(
+        DateTime2 = as.POSIXct(datetime), # convert to seconds. Might be redundant code, this function was embedded from previous code written by Aidan.
+        TimeDiff = c(NA, difftime(DateTime2[-1], DateTime2[-n()], units = "secs")), # time difference from prev photo
+        episode_id = cumsum(ifelse(is.na(TimeDiff) | TimeDiff > 60,  # Create episode IDs to distinguish from another. 
+                                  1, 
+                                  0))
+        ) %>%          
+      
+    group_by(episode_id) %>%
+      
+    mutate( 
+      episodelength = n(), # how many images in the episode?
+      event = ifelse(episodelength==1, 
+                     "", # do not populate "Start" for singletons
+                     case_when(  # Assign start and end to the first/last image of each episode, respectively
+                       row_number() == 1 ~ "Start",
+                       row_number() == n() ~ "End",
+                       TRUE ~ ""))
+      ) %>%
+    
+    ungroup() %>%
+    
+    select(-any_of(c('DateTime2', 'TimeDiff', 'dark'))) %>% # clean up
+  
+    # Make a first pass at cleaning up the site names. Probably a neater way of doing this, sue me. 
+    mutate(site = gsub("-", "_", site) %>% # First, replace the hyphen with underscore
+             gsub("_0+", "_", .) %>% # Then, remove leading zeros after the underscore
+             gsub(" ", "", .) %>% # Then, remove any spaces
+             as.factor(.) # Then, convert back to factor
+           )  
+  
+  # Disconnect from the .ddb file. It is important to close the connection to avoid corrupting the data. 
+  dbDisconnect(db)
+  
+  # CRITICAL errors that need to be fixed before running the script
+    # Possible corrupted .ddb files. 
+  if (nrow(ddb_raw) == 0) {
+    stop(cat('\n The file \n', ddb_file, '\n contains no rows of data. The file may be corrupt. Please verify this in Timelapse before proceeding.'))
+  }
+  
+  # Incorrect datetime format (common if Timelapse is set up incorrectly)
+  if ("datetime" %nin% colnames(ddb_raw)) {
+    stop(cat('\n The file \n', ddb_file, '\n may have an incorrect date time format. Please fix this in Timelapse before proceeding.'))
+  }
+  
+  # Additional errors that should be resolved in Timelapse with the script re-run afterwards. 
+  # `red()` here and elsewhere comes from the crayon package and changes the color of messages in the console. Can be removed if the package ever becomes deprecated. 
+  
+  # NA site values
+  if (any(is.na(ddb_raw$site))) {
+    warning(paste0('The',
+                   crayon::red(' Site '), 
+                   'column contains NA values in the file: \n  ', 
+                   crayon::italic(ddb_file), '\n\n'))  }
+  # Duplicate site values
+  if(n_distinct(ddb_raw$site, na.rm=T) > 1) {
+    warning(paste0('The',
+                   red(' Site '), 
+                   'column contains multiple values: \n  ', 
+                   italic(ddb_file), '\n\n'))  }
+  
+  # NA classifier values
+  if (any(is.na(ddb_raw$classifier))) {
+    warning(paste0('The',
+                   red(' Classifier '), 
+                   'column contains NA values in the file: \n  ', 
+                   italic(ddb_file), '\n\n'))  }
+
+  # Multiple classifier values
+  if(n_distinct(ddb_raw$classifier, na.rm=T) > 1) {
+    warning(paste0('The',
+                   red(' Classifier '), 
+                   'column contains multiple values: \n  ', 
+                   italic(ddb_file), '\n\n'))  }
+  
+  # Missing snow values
+  if (any(is.na(ddb_raw$snow))) {
+    warning(paste0('The',
+                   red(' Snow '), 
+                   'column is entirely NA values in the file: \n  ', 
+                   italic(ddb_file), '\n\n'))  }
+  
+  # The end goal of the function: a tibble with the semi-cleaned, semi-formatted data from each site!!!
+  return(ddb_raw)
+    
+} # end function
+```
+
+## 3.4. Read in, format, and append the .ddb files.
+The function `purrr::map_dfr()` neatly appends each site's data into a single dataframe. This will import data from any .ddb file that is in the `OSM-2023_timelapse_ddb_files` object we created earlier. It handles missing columns nicely by filling in 'NA' for any sites missing those columns. The *dark* and *deleteflag* columns in particular tend to be in some files depending on the version of Timelapse used.
+
+> Error messages need to be fixed immediately. Warning messages are 'FYI' only about high-level tagging errors, to be addressed later.
+
+```{r import ddb files}
+with_dir(new = my_netdrive,
+  OSM_2023_data <- purrr::map_dfr(OSM_2023_timelapse_ddb_files, # the list of ddb files from earlier that we are importing. 
+                                  process_ddb_file) # apply the function
+)
+
+# Export the data as a .csv. This will never be used again but it's always nice to have backups ;)
+# write_csv(OSM_2023_data, file="./data/raw/OSM_2023_raw_import.csv")
+```
+
+***
+
+# 4. Error checking Timelapse data.
+
+The following sub-section check the Timelapse data that we just imported for classification errors. These are rule-based and include anything from missing snow values to mismatches between the deployment dates and the actual iamge dates in Timelapse. Each sub-section searches for a specific 'category' of error and performs the following:
+
+- Uses a set of criteria based on the ACME protocol to identify a specific tagging error. Each chunk represents a specific error. 
+- Binds together the specific error information into a single dataframe
+- Exports the dataframe to Excel in the *./data/processed/* directory
+
+After running a chunk, navigate to *./data/processed/* and use the spreadsheets to correct errors in Timelapse directly. Some are straightforward, others may take some sleuthing to figure out. Depending on the number of errors, this could be a group task and you can upload the spreadsheets to Google Drive. 
+
+The 'categories' of errors are sorted in order from broad to specific. You may find that after fixing a metadata error, many image or datetime errors disappear on their own. For this reason, I recommend doing a first pass of each error 'category' before moving on to the next one. 
+
+*This spreadsheet DOES NOT check the following:*
+*- image timestamps. These could be wrong for many reasons and should be identified using slate photos and datasheets while tagging*
+*- the accuracy of your species identification*
+*- the accuracy of coat color, antler point, or demographic fields* 
+*Remember: nothing replaces an attentive eye and careful detail while tagging!*
+
+## 4.1. Duplicate data import errors
+
+Self-explanatory. Steps to resolve errors include:
+
+1. Open the spreadsheet with the error information
+2. Find the .ddb files that have been duplicated
+3. Determine if these are copied files? Old quickpaste files? Correct as needed.
+4. Re-run Section 3.1 onward to generate an updated list of the .ddb files to be imported. 
+
+```{r error duplicate}
+OSM_2023_error_duplicate <- OSM_2023_data %>%
+  
+  group_by(across(everything())) %>%  # Group by all columns
+  
+  filter(n() > 1) %>%                # Keep groups with more than 1 row
+  
+  ungroup() %>%
+  
+  select(site, file, fullpath, datasource) %>% # clean up the dataframe
+  
+  distinct() %>%
+  
+  mutate(error = "Duplicate data for these entries") # custom error message
+
+
+if(nrow(OSM_2023_error_duplicate) == 0){
+  writeLines("Lucky you! No duplicate rows in the dataset.")
+  rm(OSM_2023_error_duplicate)
+  
+} else {
+  
+  writexl::write_xlsx(OSM_2023_error_duplicate, "./data/processed/OSM_2023_error_duplicate.xlsx", format_headers = TRUE)
+  writeLines("Your dataset may have duplicate entries. Please refer to the excel sheet and correct in Timelapse directly")
+}
+```
+
+## 4.3. Metadata/site info errors
+
+These relate to the "heading" columns in Timelapse: *site*, *snow*, and *classifier.*. This is also where we will ensure that the site names in the data match the site names in the deployments (and vice versa). Note: if a camera was not retrieved during the field season (e.g. due to a road flooding), this will falsely be flagged as a 'datamissing' error. These issues should be marked in the camera_failure_details column of the deployment spreadsheet and can be distinguished from truly missing data. These can be disregarded at your discretion. 
+
+Steps to resolve these include:
+
+1. Open the spreadsheet with the error information.
+2. Filter the spreadsheet to a specific site to view all errors at that camera site.
+3. Correct mistakes directly in Timelapse, or in the deployment spreadsheet if necessary. 
+4. Re-run Section 3.4. onwards to update the list of errors. 
+
+Identify sites with missing values for snow:
+```{r error snow}
+error_snow <- OSM_2023_data %>%
+  
+  group_by(datasource) %>% # group by import
+  
+  filter(any(is.na(snow))) %>% # any NA values?
+  
+  select(site, datasource) %>% # clean up the dataframe
+  
+  distinct() %>%
+  
+  mutate(error = "NAs present in the snow column")
+```
+
+Identify sites with more than one value for classifier (or NAs):
+```{r}
+error_classifier <- OSM_2023_data %>%
+  
+  group_by(datasource) %>%
+    
+  filter(
+    any(is.na(classifier)) | # At least one NA values
+      all(is.na(classifier)) | # OR, all NA values (this code is redundant and could be deleted)
+      n_distinct(classifier, na.rm=T) > 1 # OR, there are multiple non-NA classifiers entered. 
+      ) %>%
+  
+  select(site, datasource) %>%
+  
+  distinct() %>%
+  
+  mutate(error = "NAs or multiple values present in the classifier column")
+```
+
+Identify sites with multiple (or missing) site names: 
+```{r}
+error_site <- OSM_2023_data %>%
+  
+  group_by(datasource) %>%
+    
+  filter(
+    any(is.na(site)) | # At least one NA value
+      all(is.na(site)) |  # OR, all NA values (this code is redundant and could be deleted)
+      n_distinct(site, na.rm=T) > 1 # OR, there are multiple non-NA values
+      ) %>%
+  
+  select(site, datasource) %>%
+  
+  distinct() %>%
+  
+  mutate(error = "NAs or multiple values present in the site column")
+```
+
+Identify sites whose data is missing, as per the deployment sheet:
+```{r}
+error_datamissing <- OSM_2023_deploy %>%
+  filter(site %in% setdiff(levels(OSM_2023_deploy$site), # check if there are extras in deployment data compared to timelapse
+                           levels(OSM_2023_data$site))
+        ) %>%
+  
+  mutate(datasource = "See deployment spreadsheet",
+         error = "No timelapse data present for this deployment. Did you forget to tag a folder or misname a site?") %>%
+  
+  select(site, datasource, error, camera_failure_details)
+```
+
+Identify sites that are not in the deployment sheet. This is likely due to misnaming a site, or an error in the deployment spreadsheet. 
+```{r}
+error_deploymissing <- OSM_2023_data %>%
+  filter(site %in% setdiff(levels(OSM_2023_data$site), # check if there are extras in Timelapse data compared to deployment
+                           levels(OSM_2023_deploy$site))
+        ) %>%
+
+  mutate(error = "No deployment information for this timelapse file. Is the site name entered correctly in Timelapse?") %>%
+  
+  select(site, datasource, error) %>%
+  
+  distinct()
+```
+
+Combine all the errors into a single spreadsheet and export:
+```{r}
+# bind_rows neatly handles any columns that aren't present in every spreadsheet. Much better than rbind(). 
+OSM_2023_error_metadata <- bind_rows(error_classifier, 
+                                      error_snow, 
+                                      error_site,
+                                      error_datamissing, 
+                                      error_deploymissing)
+
+if(nrow(OSM_2023_error_metadata) == 0){
+  writeLines("Lucky you! No metadata errors in the dataset.")
+} else {
+  writexl::write_xlsx(OSM_2023_error_metadata, "./data/processed/OSM_2023_error_metadata.xlsx", format_headers = TRUE)
+  writeLines("Metadata errors are present. Please refer to the excel sheet and correct in Timelapse directly if needed.")
+}
+
+rm(error_classifier, error_snow, error_site, error_datamissing, error_deploymissing) # clean up
+```
+
+## 4.3. Species/image tagging errors
+
+These errors are anything related to ACME's tagging protocol. These can be time-consuming to fix Missing coat color, missing species tags, incorrect demographics, etc. Note: when two animals occur together in an image, or within 60 seconds of each other, this will be falsely tagged as an error. These instances should be mentioned in the comments in Timelapse so they are easy to distinguish from true errors. They will *always* get flagged as errors. These can be disregarded at your discretion. 
+
+Steps to resolve these include:
+
+1. Open the spreadsheet with the error information
+2. Filter the spreadsheet to a specific site to view all errors at that camera site
+3. Correct mistakes directly in Timelapse. 
+4. Re-run Section 3.4. onwards to update the list of errors.
+
+**As of 2024, .csv spreadsheets are a thing of the past and DO NOT need to be re-exported after fixing errors in Timelapse.** Everything is updated in real time in the .ddb files, woohoo!
+
+Missing or multiple species tags for a non-empty event:
+```{r}
+error_speciestag <- OSM_2023_data %>%
+  
+  group_by(site, episode_id, datasource) %>% # Including datasource as a grouping variable is necessary when there are >9999 images per site. retrieve every image in an event
+  
+  filter(any(empty==FALSE)) %>% # Select non-empty events
+
+  filter(
+    n_distinct(species)!=1 # Select events with more than one species tag (this includes NA)
+    ) %>%
+  
+  mutate(
+    error = "Missing or multiple species tags within an event"
+    )
+```
+
+Missing or multiple group count tags for a non-empty event:
+```{r}
+error_groupcount <- OSM_2023_data %>%
+  
+  group_by(site, episode_id, datasource) %>% # retrieve every image in an event
+  
+  filter(any(empty==FALSE)) %>% ## Select non-empty events
+  
+  # are there multiple for any of the group metrics, including NAs?
+  filter( 
+    n_distinct(group_count)>1 | 
+    n_distinct(g_male)>1 |
+    n_distinct(g_female)>1 |
+    n_distinct(g_unknownsex)>1 |
+    n_distinct(g_adult)>1 |
+    n_distinct(g_yly)>1 |
+    n_distinct(g_yoy)>1 |
+    n_distinct(gunknownage)>1
+    ) %>%
+  
+  mutate(
+    error = "Missing or multiple group counts within a single event"
+    )
+```
+
+Image is marked as not empty, but there are no frame counts:
+```{r}
+error_framecount_missing <- OSM_2023_data %>%
+  
+  # Non-empty, non-staff images
+  filter(empty == FALSE,
+         species != 'Staff') %>%
+  
+  filter(if_all(c(total, male, female, unknownsex, adult, yly, yoy, unknownage), is.na)) %>% # are all of them NA?
+  
+  mutate(
+    error = "Image is not empty but has no frame counts... did you forget to tag it?"
+    )
+```
+
+Any frame totals for a given image exceed group totals:
+```{r}
+error_framecount_high <- OSM_2023_data %>%
+  
+  group_by(site, episode_id, datasource) %>% # retrieve every image in an event
+  
+  # Are any of the frame counts higher than the corresponding group count?
+  filter(
+    total > group_count | 
+    male > g_male |
+    female > g_female |
+    unknownsex > g_unknownsex |
+    adult > g_adult |
+    yly > g_yly |
+    yoy > g_yoy |
+    unknownage > gunknownage
+    ) %>%
+  
+  mutate(
+    error = "Frame totals exceed the group totals for the event"
+    )
+```
+
+For species larger than coyote: sex totals, age totals, and animal totals should be equal.
+```{r}
+error_demographic <- OSM_2023_data %>%
+  
+  # big animals only. Can be expanded manually.
+  filter(species %in% c('Moose', 'Black bear', 'Grey wolf', 'Caribou', 
+                        'Mule deer', 'Grizzly bear', 'Unknown deer', 'Lynx', 
+                        'Unknown ungulate', 'Unknown bear', 'Cougar' )
+         ) %>%
+  
+  group_by(site, episode_id, datasource) %>% # retrieve every image in an event
+
+  rowwise() %>% # Check each image individually. Helps the sum() function to work properly. 
+  
+  filter(
+    # Calculate sums for frame sex columns and age columns and tests if they are equal. Two of these equalities would likely suffice, could drop the third. 
+    sum(male, female, unknownsex, na.rm = TRUE) != sum(adult, yly, yoy, unknownage, na.rm = TRUE) |
+    sum(male, female, unknownsex, na.rm = TRUE) != total |
+    sum(adult, yly, yoy, unknownage, na.rm = TRUE) != total |
+    
+    # Calculate sums for group (g_) columns and tests if they are equal. Two of these equalities would likely suffice, could drop the third. 
+    sum(g_male, g_female, g_unknownsex, na.rm = TRUE) != sum(g_adult, g_yly, g_yoy, gunknownage, na.rm = TRUE) |
+    sum(g_male, g_female, g_unknownsex, na.rm = TRUE) != group_count |
+    sum(g_adult, g_yly, g_yoy, gunknownage, na.rm = TRUE) != group_count
+    ) %>%
+  
+  mutate(
+    error = "Total, age, and demographic totals do not sum"
+    )
+```
+
+Missing coat colour for applicable species:
+```{r}
+# Missing coat colour
+error_coatcolor <- OSM_2023_data %>%
+
+  filter(
+    species %in% c('Black bear', 'Red fox', 'Grey wolf', 'Grizzly bear' ) # the only species of interest for coat color. 
+    ) %>%
+  
+  filter(
+    coatcolour %>% 
+      is.na(.) # is coat color NA?
+    ) %>%
+  
+  mutate(
+    error = "Coat color is missing"
+    )
+```
+
+Missing antler counts for ungulates (with appropriate date ranges):
+```{r}
+error_antlercount <- OSM_2023_data %>%
+  
+  mutate(month=month(datetime)) %>% # extract month as a helper column
+  
+  filter(
+    empty == FALSE # non empty images
+    ) %>%
+
+  filter(
+    (species == 'Moose' & male>=1 & month %in% 9:10) | # Male moose Sept-Oct
+    (species == 'Caribou' & month %in% 8:10) | # Any sex caribou Aug-Oct
+    (species == 'White-tailed deer' & male>=1 & month %in% 8:12) | # Male deer Aug-Dec
+    (species == 'Mule deer' & male>=1 & month %in% 8:12) # Male deer Aug-Dec
+    ) %>%
+  
+  filter(
+    is.na(leftantler) | # Missing values for any of these. Even if count is "unknown", minimum should be selected. 
+    is.na(rightantler) | 
+    is.na(lcount) | 
+    is.na(rcount)
+    ) %>%
+  
+  mutate(
+    error = "Antler count is missing"
+    )
+```
+
+Entirely empty events with a species tag (either the 'empty' or the species is wrong):
+```{r}
+error_emptyevent <- OSM_2023_data %>%
+  
+  group_by(site, episode_id, datasource) %>% # retrieve every image in an event
+  
+  filter(all(empty == TRUE), # Are all images tagged as empty?
+         any(!is.na(species)), # Do any images have a species tag?
+         species != 'Staff' # Non-staff events only
+    ) %>%
+  
+  mutate(
+    error = "Every image in an event is classified as empty, but a species tag is present!"
+    )
+```
+
+Did not get tagged as a species or as an empty image. Either 1) the image didn't get tagged, or 2) an entire animal event is missing the species tag.   
+```{r}
+error_missingspecies_untagged <- OSM_2023_data %>%
+  
+  group_by(site, episode_id, datasource) %>% # retrieve every image in an event
+  
+  filter(any(empty == FALSE), # at least one image tagged as non-empty
+    is.na(species) # all species values are empty.
+    ) %>%
+
+  mutate(
+    error = "You forgot to enter the species tag, OR this image didn't get classified."
+    )
+```
+
+Combine all the errors into a single spreadsheet and export:
+```{r}
+# Export the errors to a spreadsheet. As per the other sections. 
+OSM_2023_error_image <- bind_rows(error_speciestag, 
+                                  error_groupcount, 
+                                  error_framecount_high,
+                                  error_framecount_missing, 
+                                  error_demographic, 
+                                  error_coatcolor, 
+                                  error_antlercount,
+                                  error_emptyevent,
+                                  error_missingspecies_untagged) %>%
+  ungroup() %>%
+  select(site, file, datetime, episode_id, classifier, species, error, comments, fullpath)
+
+
+if(nrow(OSM_2023_error_image) == 0){
+  writeLines("Lucky you! No image errors in the dataset.")
+} else {
+writexl::write_xlsx(OSM_2023_error_image, "./data/processed/OSM_2023_error_image.xlsx", format_headers = TRUE)
+writeLines("Image errors are likely present. Please refer to the excel sheet and correct in Timelapse directly.")
+}
+
+rm(error_speciestag, error_groupcount, error_framecount_high, error_framecount_missing, error_demographic, error_coatcolor, error_antlercount, error_emptyevent, error_missingspecies_untagged) # clean up
+```
+
+## 4.4. Ensure deployment and data dates align
+
+There are several reasons these dates could not align, and the steps to fix them vary accordingly. 
+
+1) Camera batteries died, SD card errors, etc. No action is needed -- the *camera_failure_details* column should make it easy to identify these cases. 
+2) Cameras were programmed with the incorrect date when deployed. This should be fixed directly in Timelapse. 
+3) The deployment sheet is incorrect. Sometimes you may need to look at slate photos and scanned field datasheets to verify this. 
+
+```{r}
+OSM_2023_error_datemismatch <- OSM_2023_data %>%
+  
+  group_by(site) %>% # group by site, NOT datasource
+  
+  summarize(data_start = min(datetime) %>% as_date(.), # start and end of the Timelapse data that we have
+            data_end = max(datetime) %>% as_date(.)
+  ) %>%
+  
+  full_join(OSM_2023_deploy, by='site') %>% # join the site data to the deployment data from Section 2. 
+  
+  rename(deploy_start = start_date, # clean up deployment sheet names, which are confusing
+         deploy_end = end_date) %>%
+  
+  filter(data_start != deploy_start | # compare the dates and retain the sites where they don't align. 
+           data_end != deploy_end) %>%
+  
+  mutate(error = "Deployment dates do not align with Timelapse start/end dates") %>%
+  
+  select(array, site, data_start, deploy_start, data_end, deploy_end, camera_failure_details) # arrange the columns in a way that allows easy comparison
+
+
+if(nrow(OSM_2023_error_datemismatch) == 0){
+  writeLines("Lucky you! No date mismatch errors in the dataset.")
+} else {
+  writexl::write_xlsx(OSM_2023_error_datemismatch, "./data/processed/OSM_2023_error_datemismatch.xlsx", format_headers = TRUE)
+  writeLines("Date mismatch errors may be present. Please refer to the excel sheet and correct in Timelapse if needed")
+}
+```
+
+## 4.5. Visually verify that species tags are correct. 
+
+Check the list of species and 'otherspecify' to ensure everything looks reasonable. For example, there should not be any Mule Deer on OSM cameras, any entries of mule deer should be re-inspected and confirmed. In future, a more rigorous approach would be to export every single animal image to a new folder (sorted by species) and scroll through to correct any incorrect species IDs. 
+
+```{r}
+
+OSM_2023_data_clean %>% 
+  group_by(species) %>%
+  summarize(n_photos = n())
+
+OSM_2023_data_clean %>%
+  group_by(otherspecify) %>%
+  summarize(n_photos = n())
+
+```
+
+> **NOTE: Error checking is a time-consuming, iterative process. Re-run Section 2, Section 3, and Section 4 of the script over and over again until there are no more flagged errors, OR the errors that are present are acceptable (e.g., a date mismatch due to a camera malfunction before servicing.**
+
+***
+
+# 5. Add 'placeholder' missing noon photos to the image data. 
+
+## 5.1. Identify days where there is no photo being taken at noon.
+
+This is because either:
+
+  1) The camera was not programmed to take timelapse photos (a big issue for verifying operability).
+  2) The camera was deployed with an incorrect time that was adjusted during image tagging, so the photos taken at "noon" now occur at the corrected time. 
+  3) The camera was programmed to take timelapse photos at an incorrect time (e.g., being taken at midnight instead).
+  
+This is a useful tool for troubleshooting timestamps on the cameras and verifying operability. I recommend taking a look at the sites that are missing noon photos, and cross referencing with the deployment/image tagging spreadsheets to see if this makes sense and whether any errors need to be corrected. 
+
+The following code will append "placeholder" noon photos to the image data for any operating date where there is no image with a timestamp of "12:00:00", for any of the reasons listed above. There could still be a timelapse photo being taken at 11:00:00, for instance. At any rate, having a noon photo for every day a camera was operating is a useful part of the protocol for quickly determing survey effort directly from image data: if a camera has a noon photo, we know it was working (and an 'absence' can be considered a 0, not a *NA* in a dataset). A researcher need only query the data for the number of noon photos to get the number of operating days within a given period. This code could also be expanded by including a query that appends a placeholder for noon images tagged as Empty==FALSE, which would add a second noon photo in the event that the actual noon photo has a species present (I don't think this is necessary). 
+
+> **CAUTION: this code will add missing noon photo for *every day* between the first and last day of data in an image folder.** Noon photos will not be appended for dates between "image folders" in case there are gaps between deployments. Running this code makes the critical assumption that cameras were *actually* operating between these days. This is a reasonable assumption for the vast majority of OSM data, but if you know otherwise (e.g., a camera randomly stopped working for a few weeks, then began operating again), you should NOT run this code on that data. 
+
+```{r eval=FALSE, paged.print=FALSE}
+OSM_2023_noon_missing <- OSM_2023_data %>%
+    
+  group_by(datasource, site) %>%
+    
+  summarize(data_start = min(datetime),
+            data_end = max(datetime)) %>%
+  
+  select(-datasource) %>% # just visual, to keep things tidy
+    
+  rowwise() %>%  
+  
+  mutate(active_days = list(seq(from = date(data_start), to = date(data_end), by="day"))) %>% # create a list sequence of dates for each site from the first to the last day of operability
+    
+  unnest(active_days) %>% # convert back to dataframe
+  
+  mutate(datetime = as_datetime(paste(active_days, "12:00:00")), # Create a fake noon datetime stamp
+#         empty = as.logical(TRUE)
+         ) %>%
+  
+  filter(datetime >= data_start & # Edge cases, in case a camera was deployed after noon or retrieved before noon
+           datetime <= data_end) %>% 
+
+  select(site, datetime) %>% #  select(site, datetime, empty) %>%
+
+  # filter out the datetimes for which there is already a noon photo in the OSM data
+  anti_join(OSM_2023_data, by=c("site", "datetime")) %>% #anti_join(OSM_2023_data, by=c("site", "datetime", "empty")) %>% 
+  
+  # Some metadata so that not all the fields are NA and we know where these 'fake' entries came from
+  mutate(comments = "Automatically added as a placeholder for a missing noon photo.",
+         deleteflag = FALSE,
+         event = "",
+         empty = TRUE,
+         file = "No image",
+         classifier = "Auto",
+         snow = NA,
+         fullpath = "No image") %>%
+  
+  ungroup()
+
+# Inspect which sites have missing noon photos, and how many:
+OSM_2023_noon_missing %>%
+  
+  group_by(site) %>%
+  
+  summarize(n_photos = n(), # this is the number of days with missing noon photos (conveniently for us, the number of days a camera was working)
+            first_missing = min(datetime),
+            last_missing = max(datetime)
+  )
+
+```
+
+## 5.2. Append the placeholder noon photos to the image data
+
+Once you've inspected the `OSM_2023_noon_missing` data frame **and confirmed that the photos listed correspond to days where a camera was operating, but no noon photo is present** (as opposed to days cameras were NOT operating), merge them with the OSM data:
+```{r, eval=FALSE}
+if(autofix_one_image_per_day == TRUE) {     # select/save one image per data and classify species as 'empty' or 'blank' to help quantify survey effort
+
+  {cat(bold$red("WARNING! Have you verified that the noon photos you are adding correspond to days cameras were ACTUALLY working?\n"))
+  cat(red("Type 'yes' to continue: \n"))
+  proceed <- readline(prompt = "")
+  
+  if(tolower(proceed) == 'yes'){
+    
+    
+    OSM_2023_data <- OSM_2023_data %>%
+        
+      bind_rows(., OSM_2023_noon_missing) %>%
+      
+      arrange(site, datetime)
+    
+    cat("Noon photos successfully added at the following sites:", paste0(unique(OSM_2023_noon_missing$site)), "\n")
+
+    
+  } else {cat("Mission aborted! No noon photos have been added, go back and review your data.\n")}
+  }
+}
+  
+  
+```
+
+***
+
+# 6. Format and export the cleaned image data. 
+
+## 6.1. Remove any unwanted columns and create new ones.
+
+Some of our helper columns are still present, but we don't want them anymore. Likewise, we want to parse out the date and the array/site. Some of this code is older, from Marissa, and no longer needed. Kept in case it's helpful in future years. Sometimes Timelapse creates columns called ...37, ...38, etc. when working off of .csv files. This should not be an issue anymore!
+
+```{r}
+OSM_2023_data_clean <- OSM_2023_data %>% 
+  
+  # removed extra columns (see R markdown for info on why these columns got added)
+  select(-any_of(c('...37',
+                   'dark',
+                   '...38',
+                   'id',
+                   'episode_id', 
+                   'episodelength',
+                   'deleteflag'))) %>%
+  
+  # filter out the two entries with years before 2022
+  #filter(year(datetime) >= 2023) %>% 
+  
+#  # fix issues with site column 
+  mutate(
+#    # fix site entry with unnecessary space
+#    site = recode(site,
+#                  # old entry followed by new entry
+#                  'LU 01-71' = 'LU01-71'), 
+#  
+#    # site needs to be a factor and for some reason the code above changes it to a character
+#    site = as.factor(site),
+    
+    # add month and year columns from the datetime data for merging with other files later
+    month = month(datetime),
+    year = year(datetime),
+    day = day(datetime)) %>% 
+  
+  # Replace 0s with NAs for the demographic/age/total columns to keep things neat. 
+  mutate(
+    across(total:gunknownage, ~ replace(., . == 0, NA))
+    ) %>%
+
+    # also split the site column (but keep original) into the LU and site
+  separate_wider_delim(site,
+                       delim = '_',
+                       names = c('array',
+                                 'camera'),
+                       cols_remove = FALSE)
+```
+
+## 6.2. Final visual inspection for any glaring issues
+
+Take one last look and ensure everything looks good. The ggplot is a nice way to look at camera operability and make sure there are no obvious issues: 
+
+```{r}
+# columns (removed extra columns w/ NAs)
+names(OSM_2023_data_clean)
+ 
+# sites (fixed LU 01-71)
+levels(OSM_2023_data_clean$site)
+
+print(OSM_2023_data_clean,
+      n = 15)
+
+# create graph of camera operability
+OSM_2023_data_clean %>%
+    
+  group_by(array, site) %>%
+    
+  summarize(data_start = min(datetime),
+            data_end = max(datetime)) %>%
+
+ggplot(., aes(color = array)) +
+  
+  geom_segment(aes(x = data_start, 
+                   xend = data_end,
+                   y = site, 
+                   yend = site)) +
+  
+  theme(axis.text = element_text(size = 6))
+```
+
+## 6.3. Export the Timelapse data
+
+In case someone wants all of the cleaned Timelapse data for a project:
+
+```{r save timelapse}
+# if someone needs this data later
+# re-exporting the datetime column as a character with a leading space will help retain any photos taken at midnight (00:00:00), which otherwise get timestamps scrubbed by Excel
+
+# 1. Into my working data folder for the RProject
+write.csv(OSM_2023_data_clean %>% mutate(datetime = paste0(" ", format(datetime, format = "%Y-%m-%d %H:%M:%S"))), 
+          file = 'data/processed/OSM_timelapse_2023.csv',
+          na = "", row.names = FALSE)
+
+# 2. Into an archive on the netdrive
+with_dir(new = my_netdrive, 
+         
+  write.csv(OSM_2023_data_clean %>% mutate(datetime = paste0(" ", format(datetime, format = "%Y-%m-%d %H:%M:%S"))), 
+            file = '2. Timelapse Files/OSM_timelapse_2023.csv',
+            na = "", row.names = FALSE)
+  )
+
+```
+
+In case someone (for some reason) wants to look at data from a single site, separate out the data and export the individual site data to the netdrive. This is also a good way to save the data for future use in case we lose the .ddb files or the original images. 
+```{r}
+with_dir(new = my_netdrive,
+
+  # Create the directories for each array
+  purrr::walk(paste0('2. Timelapse Files/', unique(OSM_2023_data_clean$array)), 
+              ~dir_create(.x))
+  
+)
+
+with_dir(new = my_netdrive,
+  
+  # Split up the data by site, and export to the folder for the corresponding array.
+  purrr::walk(unique(OSM_2023_data_clean$site),
+              ~filter(OSM_2023_data_clean, site==.x) %>% 
+                
+                # re-exporting the datetime column as a character with a leading space will help retain any photos taken at midnight (00:00:00), which otherwise get timestamps scrubbed by Excel
+                mutate(., datetime = paste0(" ", format(datetime, format = "%Y-%m-%d %H:%M:%S"))) %>%
+                
+                 write.csv(., # write_csv from readr is faster, but this allows the NAs to be written as blank space and gives a cleaner end product. 
+                           file = paste0('2. Timelapse Files/',
+                                         unique(.$array), '/',
+                                         .x,
+                                         '.csv'),
+                           na = "", row.names = FALSE)
+              )
+  )
+```
+
+***
+
+# 7. Export photos of interest
+
+Any photos marked as "Noteworthy" during image tagging will get exported to a 'best of' folder, organized by species. They will get generic names, for now. This section of code could easily be adapted to export any subset of photos. For instance, someone could export all photos of grouse for quick review, or export all photos of YLY bears in a particular time frame for creating animations, analysis, QAQC, etc. Lots of options!!
+
+## 7.1. Identify noteworthy photos
+
+```{r}
+noteworthy_photos <- OSM_2023_data_clean %>%
+  
+  filter(noteworthy == TRUE) %>%
+  
+  drop_na(species) %>%
+  
+  select(file, datetime, site, species, fullpath, classifier) %>%
+  
+  mutate(
+    newdir = paste0("./1. Imagery/Noteworthy photos/", species), # the location for the image to be exported
+    newfile = paste0(species, '_', site, '_', # the new, generic file name
+                     format(datetime, "%Y%m%d_%H%M%S"),
+                     '.JPG'),
+    newpath = paste0(newdir, "/", newfile) # the full path to the new file
+    )
+```
+
+## 7.2. Export the photos to the netdrive
+
+This step can be overwritten as many times as needed. 
+
+```{r}
+with_dir(new = my_netdrive,
+
+  {purrr::walk(unique(noteworthy_photos$newdir), ~dir_create(.x)) # walk suppresses messages for background processes like writing files
+
+  purrr::walk2( # walk suppresses messages for background processes like writing files
+    paste0(my_netdrive, "/", noteworthy_photos$fullpath), # original path
+    paste0(noteworthy_photos$newpath), # location of the new folder
+    ~file_copy(.x, .y, overwrite=T))
+  }
+
+)
+```
+
+***
+
+# 8. APPENDIX: Unused code chunks
+
+## 8.1. Identify non-staff human-use photos to be blurred.
+
+This section will blur all non-staff photos that depict humans. This is a requirement for privacy and data sharing. **Currently, this step is IRREVERSIBLE (which is the whole point).** As a result, there are a couple safeguards to prevent you from accidentally running it. First, you need to set `blur_human_use` in Section 1 to `TRUE`. The default is `FALSE`. Second, when running the code you will be prompted to enter 'yes' in your console to proceed. This might create issues while knitting so for now the chunk is set to `eval=FALSE`. 
+
+First, we will identify the list of photos we want to blur and their file paths:
+```{r}
+    OSM_2023_human_to_blur <- OSM_2023_data_clean %>%
+      
+      filter(species %in% (c('Human', # human images to blur
+                             'ATVer',
+                             'Hiker',
+                             'Biker',
+                             'Snowmobiler',
+                             'Hunter',
+                             'Equestrian'))) %>%
+      
+      select(site, datetime, species, fullpath)
+```
+
+## 8.2. Perform the blurring (IRREVERSIBLE):
+
+```{r blur human, eval=FALSE}
+if(blur_human_use == TRUE){
+
+  # Warning message on console and required prompt. 
+  {cat(bold$red("WARNING! This operation will BLUR ALL HUMAN USE PHOTOS. This step irreversibly overwrites original files\n"))
+  cat(red("Do you wish to continue? Type 'yes' to continue: \n"))
+  proceed <- readline(prompt = "")
+  
+  if(tolower(proceed) == 'yes'){
+    
+    cat("Blurring images... don't change your mind now!\n")
+
+    with_dir(new = my_netdrive,
+
+             purrr::walk(OSM_2023_human_to_blur$fullpath,
+                        function(fullpath){
+                          img <- magick::image_read(fullpath) #import image
+                          blurred_img <- magick::image_blur(img, radius = 40, sigma = 20) #blur image in R
+                          image_write(blurred_img, fullpath) #OVERWRITE old image with the new, blurred image
+                        })
+             )
+  } else {cat("Mission aborted! No photos were blurred.\n")}
+  }
+    
+}
+```
+
+## 8.3. Interpolate missing snow. This will also apply to missing noon photos. 
+
+This fills in NA values for snow with the value of the previous image. A great trick, except for if there are no timelapse photos and you're interpolating for days, weeks, or months of missing snow values (that would be bad and unrealistic). For that reason, this chunk is not currently being used. 
+
+```{r, eval=FALSE}
+if(interpolate_snow == TRUE) {     # select/save one image per data and classify species as 'empty' or 'blank' to help quantify survey effort
+
+  OSM_2023_data <- OSM_2023_data %>%
+    
+    group_by(site) %>%
+    
+    arrange(datetime) %>%
+
+    mutate(snow = if_else(is.na(snow),  ## This might not be appropriate. For example, if 3 weeks straight of no snow we might rather say "Unknown" instead of interpolating
+                          lag(snow),
+                          snow))
+  
+}
+```
+
