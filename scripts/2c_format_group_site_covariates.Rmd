@@ -637,15 +637,18 @@ head(covs)
 
 Also append the NDVI:
 
+A few of these fields are in NDVI and not the others... they are nice to have though so I'll add them in just for posterity (or remove them at the end of the chunk):
 ```{r}
-ndvi <- read_csv("./data/raw/OSM_MODISNDVI_site_covariates.csv")
+ndvi <- read_csv("./data/raw/OSM_MODISNDVI_site_covariates.csv") %>%
+  
+  select(-deployment_id, -start_date, -end_date)
 
 covs <- covs %>%
   
   left_join(ndvi, by = c("site", "array", "buffer_dist", "lat", "long")) %>%
   
   # Remove some columns. Should have been done in an earlier step but just noticed it now...
-  select(-camera_failure_details, -deployment_id)
+  select(-camera_failure_details)
 ```
 
 
@@ -655,6 +658,35 @@ covs <- covs %>%
 write_csv(covs, "./data/processed/OSM_site_covariates_2021-2024.csv")
 ```
 
+
+Export to a shapefile for data requests:
+
+```{r}
+covs <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv")
+
+
+# Convert to sf using existing UTM coordinates
+covs_sf <- covs %>%
+  filter(buffer_dist == 250) %>%
+  st_as_sf(
+    coords = c("easting_12n", "northing_12n"),
+    crs = 26912,
+    remove = FALSE     # keep original cols
+  )
+
+# Quick check
+plot(covs_sf[,1])
+
+# Export to ESRI Shapefile
+st_write(
+  covs_sf,
+  "C:/OSM_ACMELab_CameraStations_2021_2025",
+  driver = "ESRI Shapefile",
+  delete_layer = TRUE
+)
+
+write_csv(covs_sf, "./OSM_ACMELab_CameraStations_2021_2025.csv")
+```
 
 
 End script
