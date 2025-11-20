@@ -8,9 +8,6 @@ output:
     toc: true
     toc_float: true
 ---
- 
-> IMPORTANT the first two chunks of this r markdown file **after** the r setup allow for plot zooming, but it also means that the html file must be opened in a browser to view the document properly. When it knits in RStudio the preview will appear empty but the html when opened in a browser will have all the info and you can click on each plot to Zoom in on it. 
-
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -25,9 +22,9 @@ library(sf)
 
 A few notes about this script.
 
-If you are running this with the 2023-2024 data make sure you download the whole (OSM_2023-2024 GitHub repository)[https://github.com/ACMElabUvic/OSM_2023-2024] from the ACMElabUvic GitHub. This will ensure you have all the files, data, and proper folder structure you will need to run this code and associated analyses.
+If you are running this with the 2024-2025 data make sure you download the whole (OSM_2024-2025 GitHub repository)[https://github.com/ACMElabUvic/OSM_2024-2025] from the ACMElabUvic GitHub. This will ensure you have all the files, data, and proper folder structure you will need to run this code and associated analyses.
 
-Also make sure you open RStudio through the R project (OSM_2023-2024.Rproj) this will automatically set your working directory to the correct place (wherever you saved the repository) and ensure you don't have to change the file paths for some of the data. 
+Also make sure you open RStudio through the R project (OSM_2024-2025.Rproj) this will automatically set your working directory to the correct place (wherever you saved the repository) and ensure you don't have to change the file paths for some of the data. 
 
 If you have question please email the most recent author, currently   
 

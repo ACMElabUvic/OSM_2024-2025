@@ -1,0 +1,389 @@
+---
+title: "Visualize OSM mammal data"
+author: "Marissa Dyck, modified by Aidan Brushett"
+date: "2025-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Before you begin
+
+## Notes
+
+A few notes about this script.
+
+If you are running this with the 2024-2025 data make sure you download the whole (OSM_2024-2025 GitHub repository)[https://github.com/ACMElabUvic/OSM_2024-2025] from the ACMElabUvic GitHub. This will ensure you have all the files, data, and proper folder structure you will need to run this code and associated analyses.
+
+Also make sure you open RStudio through the R project (OSM_2024-2025.Rproj) this will automatically set your working directory to the correct place (wherever you saved the repository) and ensure you don't have to change the file paths for some of the data. 
+
+If you have question please email the most recent author, currently   
+
+Marissa A. Dyck   
+Postdoctoral research fellow    
+University of Victoria    
+School of Environmental Studies     
+Email: [marissadyck17@gmail.com](marissadyck17@gmail.com)     
+
+**and**
+
+Aidan M. Brushett  
+M.Sc. student
+University of Victoria    
+School of Environmental Studies     
+Email: [aidanbrushett@uvic.ca](aidanbrushett@uvic.ca)     
+
+
+## R and RStudio
+
+Before starting you should ensure you have the latest version of R and RStudio downloaded. This code was generated under R version 4.2.3 and with RStudio version 2024.04.2+764.    
+
+You can download R and RStudio [HERE](https://posit.co/download/rstudio-desktop/)   
+
+
+## R markdown
+
+This script is written in R markdown and thus uses a mix of coding markup languages and R. If you are planning to run this script with new data or make any modifications you will want to be familiar with some basics of R markdown.
+
+Below is an R markdown cheatsheet to help you get started,    
+[R markdown cheatsheet](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf)    
+
+# Setup
+
+## Install packages
+
+If you don't already have the following packages installed, use the code below to install them. *NOTE this will not run automatically as eval=FALSE is included in the chunk setup (i.e. I don't want it to run every time I run this code since I have the packages installed)
+
+```{r install packages, eval=FALSE}
+
+install.packages('tidyverse') 
+install.packages('withr') 
+```
+
+## Load libraries
+
+Then load the packages to your library.
+
+```{r libraries}
+rm(list=ls()) # start with a fresh global environment
+library(tidyverse) # data tidying, visualization, and much more; this will load all tidyverse packages, can see complete list using tidyverse_packages()
+```
+
+> Note: all the processing of response data was performed in script 1, and landscape data in script 2. We will use the products in ./data/processed/ for this script. 
+
+# 1. Import camera data:
+
+Let's read in the data from script 3. For now, we'll focus this entire script on just the 2024-2025 data since that's what we want for the Fiscal report. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
+
+```{r}
+# Operability adjusted for snow cover
+operating <- read_csv("./data/processed/OSM_operating_days_2021-2024.csv") %>%
+  
+  # This query should pull out only the 2024-2025 data from these arrays :)
+  filter(year >= 2024,
+         array %in% c("LU4", "LU2", "LU3", "LU8"))
+
+
+
+# Independent detections
+indet <- read_csv("./data/processed/OSM_independent_detections_2021-2024.csv") %>%
+  
+  # This query should pull out only the 2024-2025 data from these arrays :)
+  filter(year >= 2024,
+         array %in% c("LU4", "LU2", "LU3", "LU8"))
+
+# Monthly presence and absence
+monthlyprop <- read_csv("./data/processed/OSM_response_monthly_proportional_presence_2021-2024.csv")
+
+
+# Total detections and presence per site:
+totaldet <- read_csv("./data/processed/OSM_response_total_detections_per_effort_2021-2024.csv")
+```
+
+What sites do we want to visualize? If we constrain this to sites contained within "independent detections" file we'll be able to filter everything to only the sites for which we actually have data. 
+
+```{r}
+sites <- (unique(indet$site))
+```
+
+
+
+# 2. Display camera operability 
+
+Let's read in the camera operability dates *for cameras with data* and plot it out. For now, we'll focus this entire script on just the 2024-2025 data since that's what we want for the Fiscal report. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
+
+
+Now we can plot it:
+
+```{r}
+operating %>%
+  
+  filter(site %in% sites) %>%
+  
+  ggplot(., aes(x = date, y = site, fill = array)) +
+    geom_tile() +
+    scale_x_date(expand = c(0, 0)) +
+    theme_classic()
+```
+
+# 2. Species data:
+
+## 2.1. Indpendent detections for mammals
+
+Now lets create a few quick figures to look at the detection data
+
+```{r graph mammal detections}
+
+# Data visualization independent detections---------------------------------------------
+
+# create a vector of the list of mammals to use for quick data visualization/exploration. Could also create a list of species that aren't useful if that is shorter and use filter(!species %in% OBJECTNAME) but for this example the vectors were about the same length
+mammals <- c('White-tailed deer',
+             'Black bear',
+             'Snowshoe hare',
+             'Moose',
+             'Coyote',
+             'Fisher',
+             'Red squirrel',
+             'Striped skunk',
+             'Grey wolf',
+             'Red fox',
+             'Cougar',
+             'Lynx',
+             'Short-tailed weasel',
+             'Porcupine',
+             'Beaver',
+             'Martin',
+             'Wolverine',
+             'Caribou',
+             'Long-tailed weasel')
+
+# remove NAs and select just images with mammals first then pipe new data into ggplot
+det_graph <- indet %>% 
+  
+  # remove less useful species
+  filter(species %in% tolower(mammals)) %>% 
+  
+  # get the number of individual detections per species to add to graph
+  group_by(species) %>% 
+  
+  mutate(n = n()) %>% 
+  
+  ungroup() %>% 
+  
+  ggplot(.,
+         aes(x = species)) +
+  
+  # create bar graph of the counts of each spp in the data
+  geom_bar(aes(fill = species)) +
+  
+  # add the number of detections above each bar using the variable n we calculated earlier
+  geom_text(aes(label = n,
+                y = n + 50),
+            size = 4) +
+  
+  # change y axis label
+  labs(y = 'Number of independent detections') +
+  
+  # change breaks for y axis
+  scale_y_continuous(breaks = seq(0,3500, by = 250)) +
+  
+  # change theme elements
+  theme(axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5,
+                                   hjust = 1,
+                                   size = 14),
+        axis.title = element_text(size = 16),
+        axis.ticks.x = element_blank(),
+        panel.grid = element_blank()) 
+
+# print graph
+det_graph
+
+```
+
+If we want to save the plot for easier viewing later we can use the code below
+
+```{r save det_graph, eval=FALSE}
+
+# save graph as jpeg (can also save as tiff, png, pdf by changing the file extension) but don't use .tiff in the github repo it takes up too much space and causes issues
+ggsave('2024_indv_det_graph.jpeg',
+       det_graph,
+       path = 'figures',
+       width = 12,
+       height = 10,
+       units = 'in',
+       dpi = 600)
+
+```
+
+## 2.2. Independent detections per LU
+
+let's also create one that graphs each LU in it's own panel using facet_wrap
+
+```{r det graph LUs}
+# let's also create one that graphs each LU in it's own panel using facet_wrap
+det_plot_LUs <- indet %>% 
+  
+  # remove less useful species
+  filter(species %in% tolower(mammals)) %>% 
+  
+ # group by array and species to calculate dets per spp per LU
+ group_by(array, species) %>% 
+  
+  # calculate a column with unique accounts of each species
+  reframe(count = n_distinct(event_id)) %>% 
+  
+  # pipe to ggplot and set aesthetics mapping
+  ggplot(aes(x = reorder(species, count), y = count)) +
+  
+  # plot as bar graph
+  geom_col() +
+  
+  # plot each LU in own panel
+  facet_wrap(vars(array)) +
+  
+  # add the number of detections at the end of each bar
+  geom_text(aes(label = count),
+            color = "black",
+            size = 3,
+            hjust = 0.2,
+            vjust = -0.3) +
+  
+  # label x and y axis with informative titles
+  labs(x = 'Species',
+       y = 'Number of Independent (30 min) Detections') +
+  
+  # add title to plot with LU name
+  
+  #ggtitle("LU21 Detections")+
+  
+  # set the theme
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 90,
+                                   vjust = 0.5,
+                                   hjust = 1,
+                                   size = 12))
+
+# view plot
+det_plot_LUs
+```
+
+We can also save this plot if we want it for reports etc. 
+
+```{r, eval = FALSE}
+# save this plot
+
+ggsave('figures/OSM_ind_det_per_LU_2023.jpg',
+       det_plot_LUs,
+       dpi = 600,
+       width = 10,
+       height = 12,
+       units = 'in')
+```
+
+
+
+## 2.3. Naive occupancy by species/array
+
+Based on total detections what is the naive occupancy?
+
+```{r fig.height=8, fig.width=10}
+# Naive occupancy
+fig_naiveocc <- totaldet %>%
+  
+  # Only the 2024-2025 sites identified early in the process
+  filter(site %in% sites) %>%
+  
+  group_by(species, array) %>%
+  
+  summarize(presence = sum(presence), 
+            total = n(),
+            naive_occ = presence/total) %>%
+  
+  ggplot(., aes(x = array)) + 
+  
+    geom_bar(aes(y = naive_occ), stat = "identity", fill = "grey50") +  # Total sites in grey
+  
+    #geom_bar(aes(y = n_present), stat = "identity", fill = "firebrick") +  # Present sites in red
+  
+    geom_text(aes(y = naive_occ + 0.1, label = round(naive_occ, 2)), size = 2.7, fontface = "italic") +  # Label above bars
+  
+    theme_bw() + 
+  
+    facet_wrap(~species, scales = 'fixed') +
+  
+    labs(x = "array",
+         y = "naive occupancy") + 
+    
+
+    theme(
+         axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+         strip.background = element_blank(),  # Remove facet background
+         strip.text = element_text(face = "bold", size = 10)
+         ) + 
+    
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))  # Remove bottom space, keep small top space
+
+fig_naiveocc
+```
+
+## 2.4. Monthly presence:
+
+Let's also try to plot the presence data at least for each species so we can see which species we likely have enough data for to model
+
+```{r plot prop month dets}
+
+# first reformat the data so species presence is a column
+proportional_detection_plot <- monthlyprop %>%
+  
+  filter(site %in% sites) %>%
+  
+  pivot_longer(cols = c('black_bear':'wolverine'),
+               names_to = 'species_presence',
+               values_to = 'months_present') %>% 
+  
+  select(site, array, species_presence, months_present) %>% 
+  
+  ggplot(aes(x = site, y = months_present, fill = array)) +
+  
+  # plot as bars
+  geom_col() +
+  
+  # viridis for colorblind :)
+  scale_fill_viridis_d() +
+  
+  labs(y = "Months present", 
+       x = "Site") + 
+  
+  scale_y_continuous(breaks = seq(0, 14, 2),
+                     expand = c(0, 0)) +
+  
+  # use facet wrap to generate separate plots for each species
+  facet_wrap(vars(species_presence)) + 
+  
+  theme_bw() + 
+  
+  theme(axis.text.x = element_blank(),
+        panel.grid = element_blank())  # remove x-axis labels
+
+# view plot
+proportional_detection_plot
+```
+
+If we want to save the plot for easier viewing later we can use the code below
+
+```{r save plot prop month dets, eval = FALSE}
+
+# save graph as jpeg (can also save as tiff, png, pdf by changing the file extension)
+ggsave('OSM_proportional_detections_2024.jpeg',
+       proportional_detection_plot,
+       path = 'figures',
+       width = 12,
+       height = 8,
+       units = 'in',
+       dpi = 600)
+```
