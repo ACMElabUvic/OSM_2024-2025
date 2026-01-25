@@ -768,7 +768,7 @@ error_demographic <- OSM_2024_data %>%
   # big animals only. Can be expanded manually.
   filter(species %in% c('Moose', 'Black bear', 'Grey wolf', 'Caribou', 
                         'Mule deer', 'Grizzly bear', 'Unknown deer', 'Lynx', 
-                        'Unknown ungulate', 'Unknown bear', 'Cougar' )
+                        'Unknown ungulate', 'Unknown bear', 'Cougar')
          ) %>%
   
   group_by(site, episode_id, datasource) %>% # retrieve every image in an event

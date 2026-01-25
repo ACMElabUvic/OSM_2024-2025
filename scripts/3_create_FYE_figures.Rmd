@@ -51,7 +51,7 @@ This script is written in R markdown and thus uses a mix of coding markup langua
 Below is an R markdown cheatsheet to help you get started,    
 [R markdown cheatsheet](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf)    
 
-# Setup
+# 0. Setup
 
 ## Install packages
 
@@ -74,44 +74,52 @@ library(tidyverse) # data tidying, visualization, and much more; this will load 
 
 > Note: all the processing of response data was performed in script 1, and landscape data in script 2. We will use the products in ./data/processed/ for this script. 
 
-# 1. Import camera data:
+# 1. Response Variable figures (MODIFY FOR FYE DEADLINE AS NEEDED)
 
-Let's read in the data from script 3. For now, we'll focus this entire script on just the 2024-2025 data since that's what we want for the Fiscal report. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
+## 1.1. Import data
+
+Let's read in the data from script 3. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
 
 ```{r}
 # Operability adjusted for snow cover
-operating <- read_csv("./data/processed/OSM_operating_days_2021-2024.csv") %>%
-  
-  # This query should pull out only the 2024-2025 data from these arrays :)
-  filter(year >= 2024,
-         array %in% c("LU4", "LU2", "LU3", "LU8"))
+operating <- read_csv("./data/processed/OSM_operating_days_2021-2024.csv")
+```
 
 
-
+```{r}
 # Independent detections
-indet <- read_csv("./data/processed/OSM_independent_detections_2021-2024.csv") %>%
-  
-  # This query should pull out only the 2024-2025 data from these arrays :)
-  filter(year >= 2024,
-         array %in% c("LU4", "LU2", "LU3", "LU8"))
+indet <- read_csv("./data/processed/OSM_independent_detections_2021-2024.csv")
+```
 
+
+```{r}
 # Monthly presence and absence
 monthlyprop <- read_csv("./data/processed/OSM_response_monthly_proportional_presence_2021-2024.csv")
+```
 
 
+```{r}
 # Total detections and presence per site:
 totaldet <- read_csv("./data/processed/OSM_response_total_detections_per_effort_2021-2024.csv")
 ```
 
-What sites do we want to visualize? If we constrain this to sites contained within "independent detections" file we'll be able to filter everything to only the sites for which we actually have data. 
+
+```{r}
+# Landscape covariates
+covariates <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv") %>%
+  # Add a column from the spreadsheet of OSM land-use classifications)
+
+  left_join(read_csv("./data/raw/landscape_unit_land_use_classifications.csv", 
+                     by = "array"))
+```
+
+Quick and dirty fix to ensure we only plot sites for which we have detection data. Handles missing data from image tagging that we should track down later but maybe after FYE. If we constrain this to sites contained within "independent detections" file we'll be able to filter everything to only the sites for which we actually have data. 
 
 ```{r}
 sites <- (unique(indet$site))
 ```
 
-
-
-# 2. Display camera operability 
+## 1.2. Display camera operability 
 
 Let's read in the camera operability dates *for cameras with data* and plot it out. For now, we'll focus this entire script on just the 2024-2025 data since that's what we want for the Fiscal report. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
 
@@ -121,6 +129,10 @@ Now we can plot it:
 ```{r}
 operating %>%
   
+    # This query should pull out only the 2024-2025 data from these arrays :)
+  filter(year >= 2024,
+         array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
+
   filter(site %in% sites) %>%
   
   ggplot(., aes(x = date, y = site, fill = array)) +
@@ -129,17 +141,14 @@ operating %>%
     theme_classic()
 ```
 
-# 2. Species data:
 
-## 2.1. Indpendent detections for mammals
+## 1.3. Indpendent detections for mammals
 
-Now lets create a few quick figures to look at the detection data
+Now lets create a few quick figures to look at the detection data.
+
+First create a vector of the list of mammals to use for quick data visualization/exploration.
 
 ```{r graph mammal detections}
-
-# Data visualization independent detections---------------------------------------------
-
-# create a vector of the list of mammals to use for quick data visualization/exploration. Could also create a list of species that aren't useful if that is shorter and use filter(!species %in% OBJECTNAME) but for this example the vectors were about the same length
 mammals <- c('White-tailed deer',
              'Black bear',
              'Snowshoe hare',
@@ -159,10 +168,18 @@ mammals <- c('White-tailed deer',
              'Wolverine',
              'Caribou',
              'Long-tailed weasel')
+```
 
+Now plot it: 
+
+```{r graph mammal detections}
 # remove NAs and select just images with mammals first then pipe new data into ggplot
 det_graph <- indet %>% 
   
+    # This query should pull out only the 2024-2025 data from these arrays :)
+  filter(year >= 2024,
+         array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
+
   # remove less useful species
   filter(species %in% tolower(mammals)) %>% 
   
@@ -219,13 +236,17 @@ ggsave('2024_indv_det_graph.jpeg',
 
 ```
 
-## 2.2. Independent detections per LU
+## 1.4. Independent detections per LU
 
 let's also create one that graphs each LU in it's own panel using facet_wrap
 
 ```{r det graph LUs}
 # let's also create one that graphs each LU in it's own panel using facet_wrap
 det_plot_LUs <- indet %>% 
+  
+  # This query should pull out only the 2024-2025 data from these arrays :)
+  filter(year >= 2024,
+         array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
   
   # remove less useful species
   filter(species %in% tolower(mammals)) %>% 
@@ -287,16 +308,13 @@ ggsave('figures/OSM_ind_det_per_LU_2023.jpg',
 
 
 
-## 2.3. Naive occupancy by species/array
+## 1.5. Naive occupancy by species/array
 
 Based on total detections what is the naive occupancy?
 
 ```{r fig.height=8, fig.width=10}
 # Naive occupancy
 fig_naiveocc <- totaldet %>%
-  
-  # Only the 2024-2025 sites identified early in the process
-  filter(site %in% sites) %>%
   
   group_by(species, array) %>%
   
@@ -331,7 +349,7 @@ fig_naiveocc <- totaldet %>%
 fig_naiveocc
 ```
 
-## 2.4. Monthly presence:
+## 1.6. Monthly presence:
 
 Let's also try to plot the presence data at least for each species so we can see which species we likely have enough data for to model
 
@@ -339,8 +357,6 @@ Let's also try to plot the presence data at least for each species so we can see
 
 # first reformat the data so species presence is a column
 proportional_detection_plot <- monthlyprop %>%
-  
-  filter(site %in% sites) %>%
   
   pivot_longer(cols = c('black_bear':'wolverine'),
                names_to = 'species_presence',
@@ -387,3 +403,35 @@ ggsave('OSM_proportional_detections_2024.jpeg',
        units = 'in',
        dpi = 600)
 ```
+
+
+
+********* NEEDS TO BE ADDED FOR FYE DEADLINE
+
+## 1.7. Change in naive occupancy for LU2 and LU3 (MARISSA)
+
+Will need to re-import data, or just move the `filter(year>=2024)` etc. queries to the individual figures above so the full data is present. 
+
+```{r}
+
+```
+
+
+
+# 2. Covariate figures
+
+## 2.1. Covariate histogram by LU
+
+First, well pads: 
+
+```{r}
+covariates %>%
+  
+  # Remove the early, partial sample of LU2 and LU3 (the only arrays from 2022)
+  filter(array_year > 2022,
+         # Buffer 500m is the geometric mean of our sampled scales, let's use it. 
+         buffer_dist == 500) %>%
+  
+  ggplot., 
+```
+
