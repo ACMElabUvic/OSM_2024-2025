@@ -682,7 +682,7 @@ operating_months_bears <- operating_months %>%
 # Update the months_active field for bears
 proportional_months <- proportional_months %>%
   
-  left_join(operating_months_bears, by = c('array', 'site')) %>%
+  left_join(operating_months_bears, by = c('array', 'array_visit', 'site')) %>%
   
   # overwrite absent black bear column
   mutate(absent_black_bear = months_active_bears - black_bear) %>%
@@ -854,7 +854,7 @@ operating_weeks_bears <- operating_weeks %>%
 # Update the weeks_active field for bears
 proportional_weeks <- proportional_weeks %>%
   
-  left_join(operating_weeks_bears, by = c('array', 'site')) %>%
+  left_join(operating_weeks_bears, by = c('array', 'array_visit', 'site')) %>%
   
   # overwrite absent black bear column
   mutate(absent_black_bear = weeks_active_bears - black_bear) %>%

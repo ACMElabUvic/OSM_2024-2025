@@ -1,4 +1,4 @@
-array,array_year,site,month,year,species,presence,detections
+array,array_visit,site,month,year,species,presence,detections
 LU2,LU2_2021,LU2_100,1,2022,black bear,0,0
 LU2,LU2_2021,LU2_100,1,2022,caribou,0,0
 LU2,LU2_2021,LU2_100,1,2022,cougar,0,0

@@ -1,4 +1,4 @@
-array,array_year,site,camera_days,species,detections,presence
+array,array_visit,site,camera_days,species,detections,presence
 LU2,LU2_2021,LU2_100,206,atver,0,0
 LU2,LU2_2021,LU2_100,206,beaver,0,0
 LU2,LU2_2021,LU2_100,206,black bear,2,1

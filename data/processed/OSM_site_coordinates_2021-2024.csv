@@ -1,4 +1,4 @@
-array,site,long,lat,easting_12n,northing_12n,start_date,end_date,camera_failure_details,deployment_id,array_year
+array,site,long,lat,easting_12n,northing_12n,start_date,end_date,camera_failure_details,deployment_id,array_visit
 LU2,LU2_3,-111.48897,54.871919999999996,468621.87804954505,6080648.465078816,2021-07-15,2022-02-06,NA,NA,LU2_2021
 LU2,LU2_5,-111.40779,54.87287,473831.9336592749,6080720.833836847,2021-07-12,2022-02-06,NA,NA,LU2_2021
 LU2,LU2_100,-111.76688,54.99404,450937.0408583181,6094397.1487539485,2021-07-15,2022-02-05,NA,NA,LU2_2021

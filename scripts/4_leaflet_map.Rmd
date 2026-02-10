@@ -1,0 +1,777 @@
+---
+title: "Create leaflet map to explore covariates"
+author: "Aidan Brushett"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: default
+    toc: yes
+    toc_float: yes
+---
+
+# Before you begin
+
+Aidan Brushett
+Ph.D. Student
+University of Victoria    
+School of Environmental Studies     
+Email: [aidanbrushett@uvic.ca](aidanbrushett@uvic.ca)
+
+---------
+
+# 0. Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(sf)
+library(tidyverse)
+library(leaflet)
+library(leaflet.extras)
+library(htmlwidgets)
+library(withr) # Savewidget selfcontained doesn't work with relative paths for some reason
+rm(list=ls())
+```
+
+# 1. Import data
+
+```{r}
+site_covs <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv")
+
+response <- read_csv("./data/processed/OSM_response_total_detections_per_effort_2021-2024.csv") %>%
+  #group_by(array, site, species) %>%
+  mutate(detections_per_effort = detections/camera_days * 100) %>%
+  mutate(species = str_replace(species, " ", "_"),
+         species = str_replace(species, "-", "_")) %>%
+  pivot_wider(id_cols = 1:3, names_from = species, values_from = detections_per_effort)
+
+# OR prop binomial response
+
+response <- read_csv("./data/processed/OSM_response_monthly_proportional_presence_2021-2024.csv") %>%
+  select(-contains("absent")) %>%
+  mutate(across(4:last_col(), ~./months_active)) %>%
+  select(-months_active)
+
+
+# Points for the map
+sites_map <- site_covs %>% 
+  
+  select(-array_year) %>%
+  
+#  left_join(array_covs, by = "array") %>%
+  
+  left_join(response, by = c("site", "array")) %>%
+  
+  st_as_sf(., coords = c("long", "lat"), crs = 4269) %>% 
+  
+  st_transform(., crs = 4326) %>%
+  
+  filter(buffer_dist == 1000)
+
+
+# Array polygons for the map
+arrays_map <- site_covs %>%
+  
+  distinct(array, site, .keep_all = TRUE) %>%
+  
+  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912) %>%
+
+  st_buffer(., dist = 5000) %>%
+  
+  group_by(array) %>%
+  
+  summarize(geometry = st_union(geometry)) %>%
+  
+  mutate(geometry = st_convex_hull(geometry)) %>% 
+  
+  st_transform(., crs = 4326)
+
+
+
+plot(arrays_map)
+```
+
+
+# 2. Marvel at a map of our beautiful data:
+
+This code is poorly annotated. I will deal with it later lol.
+
+```{r}
+# Color for arrays
+array_colors <- colorFactor(palette = "Set1", domain = sites_map$array)
+# palette = "Set1"
+
+# Color for covariates
+covariates <- sites_map %>%
+  st_drop_geometry(.) %>%
+  select(where(is.numeric)) %>%
+  names(.)
+
+cov_colors <- covariates %>%
+  setNames(nm = .) %>%
+  map(function(var) {
+    colorNumeric(
+      palette = "magma",
+      domain  = sites_map[[var]],
+      na.color = "transparent"
+    )
+  })
+
+
+
+cov_colors_viridis <- covariates %>%
+  setNames(nm = .) %>%
+  map(function(var) {
+    colorNumeric(
+      palette = "viridis",
+      domain  = sites_map[[var]],
+      na.color = "transparent"
+    )
+  })
+
+
+# Export for OSM
+#arrays_map <- arrays_map %>% filter(!(array %in% c("WF1", "WF2", "RC", "CL")))
+#sites_map <- sites_map %>% filter(!(array %in% c("WF1", "WF2", "RC", "CL")))
+
+
+
+map <- leaflet(sites_map) %>%
+  addProviderTiles("OpenStreetMap") %>%
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") %>%  # Add satellite base layer
+  addFullscreenControl() %>%
+  addScaleBar(position = "topleft", 
+              options = scaleBarOptions(imperial = FALSE)) %>%  # Set TRUE for miles
+  
+  
+  
+  # Array boundary
+  addPolygons(
+    data = arrays_map,  # sites_map must be an sf or SpatialPolygonsDataFrame
+    group = "Array",
+    weight = 1,  # border width
+    color = "black",  # border color
+    fillColor = "grey90",  # fill color by array
+    fillOpacity = 0.1,
+    label = ~array,
+    popup = ~paste0(
+      "<b>Array: </b>", array
+    )
+  ) %>%
+
+  
+  
+  # Array sites
+  addCircleMarkers(
+    data = sites_map,
+    group = "Array sites<br><br><b>Disturbance</b>",
+    radius = 3,
+    weight = 0,
+    fillColor = ~array_colors(array), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Coordinates: </b>", round(easting_12n), 
+                    ", ", round(northing_12n),
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Array sites<br><br><b>Disturbance</b>",
+    position = "topright",  # Position of the legend on the map
+    pal = array_colors,  # Use the color palette defined for 'array_new'
+    values = sites_map$array,  # Values to map the colors to
+    title = "Array",  # Title for the legend
+    opacity = 1
+    ) %>%
+  
+  
+  
+  
+  # Site Disturbance
+  addCircleMarkers(
+    data = sites_map,
+    group = "Site Disturbance",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["cfi_with_harvest"]](cfi_with_harvest), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", cfi_with_harvest,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Site Disturbance",
+    position = "topright",
+    pal = cov_colors[["cfi_with_harvest"]],
+    values = sites_map$cfi_with_harvest,
+    title = "Site Disturbance",
+    opacity = 1
+  ) %>%
+
+  
+  
+  
+  # Seismic Lines
+  addCircleMarkers(
+    data = sites_map,
+    group = "Seismic Lines",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["seismic_total"]](seismic_total), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", seismic_total,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Seismic Lines",
+    position = "topright",  # Position of the legend on the map
+    pal = cov_colors[["seismic_total"]],  # Use the color palette defined for 'array_new'
+    values = sites_map$seismic_total,  # Values to map the colors to
+    title = "Seismic Lines",  # Title for the legend
+    opacity = 1
+    ) %>%
+  
+  
+  
+  
+  # Active Wells
+  addCircleMarkers(
+    data = sites_map,
+    group = "Active Wells",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["wells_active"]](wells_active), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", wells_active,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Active Wells",
+    position = "topright",  # Position of the legend on the map
+    pal = cov_colors[["wells_active"]],  # Use the color palette defined for 'array_new'
+    values = sites_map$wells_active,  # Values to map the colors to
+    title = "Active Wells",  # Title for the legend
+    opacity = 1
+    ) %>%
+  
+  
+  
+  
+  # Inactive Wells
+  addCircleMarkers(
+    data = sites_map,
+    group = "Inactive Wells",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["wells_inactive"]](wells_inactive), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", wells_inactive,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Inactive Wells",
+    position = "topright",
+    pal = cov_colors[["wells_inactive"]],
+    values = sites_map$wells_inactive,
+    title = "Inactive Wells",
+    opacity = 1
+  ) %>%
+
+  
+  
+  
+  # Roads
+  addCircleMarkers(
+    data = sites_map,
+    group = "Roads",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["roads"]](roads), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", roads,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Roads",
+    position = "topright",
+    pal = cov_colors[["roads"]],
+    values = sites_map$roads,
+    title = "Roads",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  
+  # Harvest <15
+  addCircleMarkers(
+    data = sites_map,
+    group = "Harvest <15",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["harvest_0_15"]](harvest_0_15), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", harvest_0_15,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Harvest <15",
+    position = "topright",
+    pal = cov_colors[["harvest_0_15"]],
+    values = sites_map$harvest_0_15,
+    title = "Harvest <15",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Harvest >15
+  addCircleMarkers(
+    data = sites_map,
+    group = "Harvest >15",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["harvest_gt_15"]](harvest_gt_15), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", harvest_gt_15,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Harvest >15",
+    position = "topright",
+    pal = cov_colors[["harvest_gt_15"]],
+    values = sites_map$harvest_gt_15,
+    title = "Harvest >15",
+    opacity = 1
+  ) %>% 
+  
+  
+  # Fire <15
+  addCircleMarkers(
+    data = sites_map,
+    group = "Fire <15",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["fire_0_15"]](fire_0_15), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", fire_0_15,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Fire <15",
+    position = "topright",
+    pal = cov_colors[["fire_0_15"]],
+    values = sites_map$fire_0_15,
+    title = "Fire <15",
+    opacity = 1
+  ) %>%
+  
+
+
+  # OSM Industrial
+  addCircleMarkers(
+    data = sites_map,
+    group = "OSM Industrial<br><br><b>Land Cover</b>",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["osm_industrial"]](osm_industrial), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", osm_industrial,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "OSM Industrial<br><br><b>Land Cover</b>",
+    position = "topright",
+    pal = cov_colors[["osm_industrial"]],
+    values = sites_map$osm_industrial,
+    title = "OSM Industrial",
+    opacity = 1
+  ) %>%
+
+  
+  # Conifer
+  addCircleMarkers(
+    data = sites_map,
+    group = "Coniferous",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["lc_coniferous"]](lc_coniferous), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lc_coniferous,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Coniferous",
+    position = "topright",
+    pal = cov_colors[["lc_coniferous"]],
+    values = sites_map$lc_coniferous,
+    title = "Coniferous",
+    opacity = 1
+  ) %>%
+  
+  # Mixedwood
+  addCircleMarkers(
+    data = sites_map,
+    group = "Mixedwood",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["lc_mixedwood"]](lc_mixedwood), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lc_mixedwood,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Mixedwood",
+    position = "topright",
+    pal = cov_colors[["lc_mixedwood"]],
+    values = sites_map$lc_mixedwood,
+    title = "Mixedwood",
+    opacity = 1
+  ) %>%
+  
+  # Broadleaf
+  addCircleMarkers(
+    data = sites_map,
+    group = "Broadleaf",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["lc_broadleaf"]](lc_broadleaf), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lc_broadleaf,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Broadleaf",
+    position = "topright",
+    pal = cov_colors[["lc_broadleaf"]],
+    values = sites_map$lc_broadleaf,
+    title = "Broadleaf",
+    opacity = 1
+  ) %>%
+  
+  # Shrubs
+  addCircleMarkers(
+    data = sites_map,
+    group = "Shrubs",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["lc_shrubs"]](lc_shrubs), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lc_shrubs,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup
+  addLegend(
+    group = "Shrubs",
+    position = "topright",
+    pal = cov_colors[["lc_shrubs"]],
+    values = sites_map$lc_shrubs,
+    title = "Shrubs",
+    opacity = 1
+  ) %>%
+  
+  # Wetland
+  addCircleMarkers(
+    data = sites_map,
+    group = "Wetland<br><br><b>Spp. Detection Rate</b>",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors[["lc_wetland"]](lc_wetland), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lc_wetland,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup  
+  addLegend(
+    group = "Wetland<br><br><b>Spp. Detection Rate</b>",
+    position = "topright",
+    pal = cov_colors[["lc_wetland"]],
+    values = sites_map$lc_wetland,
+    title = "Wetland",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  # Hare
+  addCircleMarkers(
+    data = sites_map,
+    group = "Snowshoe hare",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["snowshoe_hare"]](snowshoe_hare), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", snowshoe_hare,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%  # Show attributes in the popup  
+  addLegend(
+    group = "Snowshoe hare",
+    position = "topright",
+    pal = cov_colors_viridis[["snowshoe_hare"]],
+    values = sites_map$snowshoe_hare,
+    title = "Snowshoe hare",
+    opacity = 1
+  ) %>%
+    
+  
+  
+
+    # Lynx
+  addCircleMarkers(
+    data = sites_map,
+    group = "Canada lynx",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["lynx"]](lynx), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", lynx,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Canada lynx",
+    position = "topright",
+    pal = cov_colors_viridis[["lynx"]],
+    values = sites_map$lynx,
+    title = "Canada lynx",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Coyote
+  addCircleMarkers(
+    data = sites_map,
+    group = "Coyote",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["coyote"]](coyote), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", coyote,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Coyote",
+    position = "topright",
+    pal = cov_colors_viridis[["coyote"]],
+    values = sites_map$coyote,
+    title = "Coyote",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Fisher
+  addCircleMarkers(
+    data = sites_map,
+    group = "Fisher",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["fisher"]](fisher), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", fisher,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Fisher",
+    position = "topright",
+    pal = cov_colors_viridis[["fisher"]],
+    values = sites_map$fisher,
+    title = "Fisher",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Black bear
+  addCircleMarkers(
+    data = sites_map,
+    group = "Black bear",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["black_bear"]](black_bear), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", black_bear,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Black bear",
+    position = "topright",
+    pal = cov_colors_viridis[["black_bear"]],
+    values = sites_map$black_bear,
+    title = "Black bear",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Grey wolf
+  addCircleMarkers(
+    data = sites_map,
+    group = "Wolf",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["grey_wolf"]](grey_wolf), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", grey_wolf,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Wolf",
+    position = "topright",
+    pal = cov_colors_viridis[["grey_wolf"]],
+    values = sites_map$grey_wolf,
+    title = "Wolf",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Red squirrel
+  addCircleMarkers(
+    data = sites_map,
+    group = "Red squirrel",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["red_squirrel"]](red_squirrel), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", red_squirrel,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Red squirrel",
+    position = "topright",
+    pal = cov_colors_viridis[["red_squirrel"]],
+    values = sites_map$red_squirrel,
+    title = "Red squirrel",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # Moose
+  addCircleMarkers(
+    data = sites_map,
+    group = "Moose",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["moose"]](moose), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", moose,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Moose",
+    position = "topright",
+    pal = cov_colors_viridis[["moose"]],
+    values = sites_map$moose,
+    title = "Moose",
+    opacity = 1
+  ) %>%
+  
+  
+  
+  
+  # White-tailed deer
+  addCircleMarkers(
+    data = sites_map,
+    group = "White-tailed deer",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["white_tailed_deer"]](white_tailed_deer), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", white_tailed_deer,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "White-tailed deer",
+    position = "topright",
+    pal = cov_colors_viridis[["white_tailed_deer"]],
+    values = sites_map$white_tailed_deer,
+    title = "White-tailed deer",
+    opacity = 1
+  ) %>%
+    
+    
+  # Wolverine
+  addCircleMarkers(
+    data = sites_map,
+    group = "Wolverine",
+    radius = 5,
+    weight = 0,
+    fillColor = ~cov_colors_viridis[["wolverine"]](wolverine), 
+    fillOpacity = 1,
+    label = ~site,
+    popup = ~paste0("<b>Site: </b>", site, 
+                    "<br><b>Value: </b>", wolverine,
+                    "<br><b>Survey Year: </b>", array_visit)) %>%
+  addLegend(
+    group = "Wolverine",
+    position = "topright",
+    pal = cov_colors_viridis[["wolverine"]],
+    values = sites_map$wolverine,
+    title = "Wolverine",
+    opacity = 1
+  ) %>%
+    
+  
+  # Toggleable layers and legends
+  addLayersControl(
+    position = "topleft",
+    baseGroups = c("OpenStreetMap", "Satellite"),
+    overlayGroups = c("Array",
+                      "Array sites<br><br><b>Disturbance</b>", "Site Disturbance",
+                      "Seismic Lines", "Active Wells", 
+                      "Inactive Wells", "Roads", "Harvest <15", 
+                      "Harvest >15", 
+                      "OSM Industrial<br><br><b>Land Cover</b>",
+                      "Fire <15", 
+                      "Coniferous", "Mixedwood", "Broadleaf", 
+                      "Shrubs", "Wetland<br><br><b>Spp. Detection Rate</b>",
+                      "Snowshoe hare", "Canada lynx", "Coyote", 
+                      "Wolf", "Wolverine", "Fisher", "Black bear",
+                      "White-tailed deer", "Moose", "Red squirrel"),
+    options = layersControlOptions(collapsed = FALSE)
+    )
+
+map
+
+withr::with_dir(
+  "./figures/",
+  saveWidget(
+    map,
+    "./OSM_data_exploration_map_2026-02-10.html", 
+    selfcontained = TRUE,
+    title = "OSM Data Map | Aidan Brushett")
+  )
+```
+
+
