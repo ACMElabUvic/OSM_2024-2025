@@ -218,7 +218,8 @@ osm_deploy_multi_year <- list.files(path="./data/raw/",
   
   # make sure site re-reads in as a factor to compare with other data sets
   mutate(site = as.factor(site),
-         array = as.factor(array)) %>%
+         array = as.factor(array),
+         array_visit = paste0(array, "_", year(start_date))) %>%
   
   select(-camera)
 ```
@@ -328,13 +329,8 @@ unique(osm_images$array)
 unique(osm_images$site)
 ```
 
-Good enough for government work. Andrew's data paper code would be very valuable here to get this cleaned up!
+Good enough. Andrew's data paper code would be very valuable here to get this cleaned up!
 
-For now we can export the imagery:
-
-```{r}
-write_csv(osm_images, "./data/processed/OSM_timelapse_2021-2024.csv")
-```
 
 
 # 5. Determine camera operability for all years:
@@ -353,7 +349,7 @@ osm_operating <- osm_coords_deploy %>%
     
   unnest(date) %>%
   
-  select(array, site, date)
+  select(array, array_visit, site, date)
 ```
 
 We also need to modify the OSM operating dataframe to account for days where the camera was fully covered by snow or otherwise obstructed (cases where `cameramalfunction == *'Fully obscured'*`). Let's identify those from the raw timelapse data and remove them from `osm_operating`.
@@ -384,12 +380,47 @@ osm_operating <- osm_operating %>%
 #write_csv(osm_operating, "./data/raw/OSM_operating_days.csv")
 ```
 
+
 Write the file:
 
 ```{r}
 write_csv(osm_operating, "./data/processed/OSM_operating_days_2021-2024.csv")
 rm(osm_obscured)
 ```
+
+
+
+## 5.1. Add the `array_visit` variable to the images file. 
+
+
+Finally, let's add the `array_visit` variable to this dataset so that we can keep track of which fiscal year deployment took place in. 
+
+```{r}
+osm_operating_temporary <- osm_operating %>%
+  distinct(array, array_visit, date)
+
+osm_images <- osm_images %>%
+  
+  mutate(date = date(datetime)) %>%
+  
+  left_join(osm_operating_temporary,
+            by = c("date", "array")) %>%
+  
+  select(-date) %>%
+  
+  relocate(array_visit, .after="array")
+
+rm(osm_operating_temporary)
+```
+
+Now we can export the imagery:
+
+```{r}
+write_csv(osm_images, "./data/processed/OSM_timelapse_2021-2024.csv")
+```
+
+
+
 
 
 # 6. Independent detections
@@ -433,6 +464,7 @@ detections <- osm_images %>%
   
   # select only variables of interest
   select(array,
+         array_visit,
          site,
          species,
          datetime,
@@ -459,7 +491,7 @@ detections <- osm_images %>%
 # The timestamp corresponds to the EARLIEST image in the event. Other code could be added 
 osm_indet <- detections %>% 
   
-  group_by(array, species, site, event_id, year, month) %>%
+  group_by(array, array_visit, species, site, event_id, year, month) %>%
   
   summarize(datetime = min(datetime)) %>%
   
@@ -512,7 +544,7 @@ Bin the operating data monthly and retain months with \>15 days of data.
 ```{r}
 operating_months <- osm_operating %>%
   
-  group_by(array, site, month, year) %>%
+  group_by(array, array_visit, site, month, year) %>%
   
   summarize(n_days = n()) %>%
   
@@ -526,7 +558,7 @@ indet_months <- osm_indet %>%
   
   filter(species %in% focal_species) %>%
 
-  group_by(array, site, species, month, year) %>%
+  group_by(array, array_visit, site, species, month, year) %>%
   
   summarize(presence = 1,
             detections = n())
@@ -540,7 +572,7 @@ presence_months <- operating_months %>%
   # Ensure that we have a new row for each species x month combination. 
   crossing(species = focal_species) %>%
   
-  left_join(indet_months, by = c("array", "site", "species", "month", "year")) %>%
+  left_join(indet_months, by = c("array", "array_visit", "site", "species", "month", "year")) %>%
   
   # Fill missing presence and detections with 0
   mutate(presence = replace_na(presence, 0),
@@ -565,7 +597,7 @@ We will now create a proportional monthly variable for each species by determini
 ```{r, message=FALSE}
 proportional_months <- presence_months %>%
   
-  group_by(array, site, species) %>%
+  group_by(array, array_visit, site, species) %>%
   
   summarize(months_active = n(),
             months_present = sum(presence),
@@ -642,7 +674,7 @@ operating_months_bears <- operating_months %>%
   
   filter(month %in% c("4", "5", "6", "7", "8", "9", "10", "11")) %>%
   
-  group_by(array, site) %>%
+  group_by(array, array_visit, site) %>%
   
   summarize(months_active_bears = n(),
             .groups = 'drop')
@@ -681,7 +713,7 @@ operating_weeks <- osm_operating %>%
   
   mutate(week = floor_date(date, unit = "week")) %>%
   
-  group_by(array, site, week) %>%
+  group_by(array, array_visit, site, week) %>%
   
   summarize(n_days = n()) %>%
   
@@ -697,7 +729,7 @@ indet_weeks <- osm_indet %>%
 
   mutate(week = floor_date(datetime, unit = "week")) %>%
   
-  group_by(array, site, week, species) %>%
+  group_by(array, array_visit, site, week, species) %>%
   
   summarize(presence = 1,
             detections = n(),
@@ -712,7 +744,7 @@ presence_weeks <- operating_weeks %>%
   # Ensure that we have a new row for each species x week combination. 
   crossing(species = focal_species) %>%
   
-  left_join(indet_weeks, by = c("array", "site", "species", "week")) %>%
+  left_join(indet_weeks, by = c("array", "array_visit", "site", "species", "week")) %>%
   
   # Fill missing presence and detections with 0
   mutate(presence = replace_na(presence, 0),
@@ -740,7 +772,7 @@ We will now create a proportional weekly variable for each species by determinin
 ```{r, message=FALSE}
 proportional_weeks <- presence_weeks %>%
   
-  group_by(array, site, species) %>%
+  group_by(array, array_visit, site, species) %>%
   
   summarize(weeks_active = n(),
             weeks_present = sum(presence),
@@ -814,7 +846,7 @@ operating_weeks_bears <- operating_weeks %>%
   
   filter(month %in% c(4:11)) %>%
   
-  group_by(array, site) %>%
+  group_by(array, array_visit, site) %>%
   
   summarize(weeks_active_bears = n(),
             .groups = 'drop')
@@ -844,34 +876,35 @@ Clean up our workspace:
 rm(operating_weeks_bears, operating_weeks, indet_weeks)
 ```
 
+
 ## 7.5. Total independent detections controlled for with survey effort
 
 ```{r fig.height=8, fig.width=10}
 total_indet <- osm_indet %>% 
   
-  filter(species %in% focal_species) %>%
-  
   mutate(date = date(datetime)) %>%
   
   semi_join(., osm_operating, by = c("site", "date")) %>%
   
-  group_by(array, site, species) %>%
+  group_by(array, array_visit, site, species) %>%
   
   summarize(detections = n())
 
 
 total_detections <- osm_operating %>%
   
-  group_by(array, site) %>%
+  group_by(array, array_visit, site) %>%
   
   summarize(camera_days = n()) %>%
   
-  crossing(species = focal_species) %>%
+  crossing(species = unique(total_indet$species)) %>%
   
-  left_join(total_indet, by = c("array", "site", "species")) %>%
+  left_join(total_indet, by = c("array", "array_visit", "site", "species")) %>%
   
   mutate(detections = replace_na(detections, 0),
          presence = ifelse(detections > 0, 1, 0))
+
+rm(total_indet)
 ```
 
 Save the file:

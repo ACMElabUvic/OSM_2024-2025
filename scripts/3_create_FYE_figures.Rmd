@@ -91,13 +91,6 @@ operating <- read_csv("./data/processed/OSM_operating_days_2021-2024.csv")
 indet <- read_csv("./data/processed/OSM_independent_detections_2021-2024.csv")
 ```
 
-
-```{r}
-# Monthly presence and absence
-monthlyprop <- read_csv("./data/processed/OSM_response_monthly_proportional_presence_2021-2024.csv")
-```
-
-
 ```{r}
 # Total detections and presence per site:
 totaldet <- read_csv("./data/processed/OSM_response_total_detections_per_effort_2021-2024.csv")
@@ -106,45 +99,357 @@ totaldet <- read_csv("./data/processed/OSM_response_total_detections_per_effort_
 
 ```{r}
 # Landscape covariates
-covariates <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv") %>%
-  # Add a column from the spreadsheet of OSM land-use classifications)
-
-  left_join(read_csv("./data/raw/landscape_unit_land_use_classifications.csv", 
-                     by = "array"))
+covariates <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv")
 ```
 
-Quick and dirty fix to ensure we only plot sites for which we have detection data. Handles missing data from image tagging that we should track down later but maybe after FYE. If we constrain this to sites contained within "independent detections" file we'll be able to filter everything to only the sites for which we actually have data. 
+
 
 ```{r}
-sites <- (unique(indet$site))
+# Landscape unit classifications. 
+lu_classification <- read_csv("./data/raw/landscape_unit_land_use_classifications.csv")
 ```
 
-## 1.2. Display camera operability 
+What sites actually have camera data?
+We will ONLY use these sites for FYE figures. 
+This handles missing data from image tagging that we should track down later, but maybe after FYE. 
+
+```{r}
+sites_to_plot <- (unique(indet$site))
+```
+
+
+
+
+# 2. Plot camera operability
 
 Let's read in the camera operability dates *for cameras with data* and plot it out. For now, we'll focus this entire script on just the 2024-2025 data since that's what we want for the Fiscal report. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
 
-
 Now we can plot it:
 
+
+First, the complete OSM operating history:
 ```{r}
 operating %>%
+  
+  distinct(array, date) %>%
+  left_join(lu_classification, by = "array") %>%
+  mutate(classification = factor(classification, 
+                                 levels = c("low development", "pre in situ", "in situ", "mine"))) %>%
+  
+  ggplot(., aes(x = date, y = array, fill = classification)) +
+    geom_tile(height = 0.8) +
+    scale_x_date(date_breaks = "6 months", date_labels = "%b '%y") +
+    scale_fill_viridis_d() +
+    theme_classic() + 
+    labs(x = "Date",
+         y = "Landscape Unit",
+         fill = "Landscape \nClassification")
+```
+
+Save it: 
+
+```{r}
+ggsave("./figures/OSM_operability_allyears.png", width = 7, height = 4)
+```
+
+Second, just the 2024-2025 OSM operating history:
+
+```{r}
+operating %>%  
   
     # This query should pull out only the 2024-2025 data from these arrays :)
   filter(year >= 2024,
          array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
 
-  filter(site %in% sites) %>%
+  filter(site %in% sites_to_plot) %>%
   
   ggplot(., aes(x = date, y = site, fill = array)) +
     geom_tile() +
-    scale_x_date(expand = c(0, 0)) +
-    theme_classic()
+    scale_x_date(date_breaks = "2 months", date_labels = "%b '%y") +
+    theme_classic() + 
+    scale_fill_viridis_d() +
+    theme(axis.text.y = element_blank()) +
+    labs(x = "Date",
+         y = "Camera Station",
+         fill = "Landscape \nUnit")
+```
+
+Save it: 
+
+```{r}
+ggsave("./figures/OSM_operability_2024-2025.png", width = 7, height = 4)
 ```
 
 
-## 1.3. Indpendent detections for mammals
 
-Now lets create a few quick figures to look at the detection data.
+# 3. Independent detections and naive occupancy
+
+## 3.1. Identify focal species
+
+We'll identify some focal species (not used for now) and also bin some of the similar species categories. 
+
+```{r}
+# We will not use this for now
+focal_species <- tolower(c('Red squirrel',
+                   'Snowshoe hare', 
+                   'White-tailed deer',
+                   'Black bear',
+                   'Coyote',
+                   'Moose',
+                   'Lynx', 
+                   'Unknown',
+                   'Marten',
+                   'Wolverine',
+                   'Grey wolf',
+                   'Caribou',
+                   'Red fox', 
+                   'Fisher',
+                   'Spruce grouse',
+                   'Ruffed grouse', 
+                   'Grey jay',
+                   'Long-tailed weasel',
+                   'Ruffed grouse',
+                   'Short-tailed weasel',
+                   'Otter',
+                   'Canada goose',
+                   'Beaver',
+                   'Human (various)',
+                   'Porcupine',
+                   'Owl',
+                   'Cougar'
+                   ))
+
+human_species <- tolower(c('ATVer', 
+                   'Human',
+                   'Hunter',
+                   'Hiker',
+                   'Snowmobiler'
+                   ))
+
+unknown_species <- tolower(c('Unknown',
+                     'Unknown canid', 
+                     'Unknown ungulate',
+                     'Unknown deer',
+                     'Unknown mustelid',
+                     'Unknown bear'))
+```
+
+## 3.2. Independent detections and naive occupancy per array
+
+```{r}
+# Split the data up by array and survey year
+for(LU in unique(totaldet$array_visit)){
+  
+  print(LU)
+
+  # Create the dataset for the figure
+  fig_totaldet_data <- totaldet %>%
+    
+    filter(site %in% sites_to_plot) %>%
+    
+    filter(array_visit == LU) %>%
+    
+    # Group together a few similar species
+    mutate(species = case_when(
+      species %in% human_species ~ "human (various)",
+      species %in% unknown_species ~ "unknown (various)",
+      TRUE ~ species)) %>%
+    
+    # Remove the species we don't want in the figure
+    filter(!species %in% c("staff", 
+                           "other", 
+                           "other birds")) %>%
+    
+    left_join(lu_classification, by = "array") %>%
+
+    group_by(species, array, classification) %>%
+    
+    # How many rows (detections) per species?
+    summarize(detections = sum(detections),
+              effort = sum(camera_days),
+              present_sites = sum(presence), 
+              total_sites = n()) %>%
+    
+    mutate(naiveocc = present_sites / total_sites)
+  
+  
+  # Create the title for the figure
+  title <- paste0(unique(fig_totaldet_data$array),
+                  " (",
+                  unique(fig_totaldet_data$classification),
+                  ")")
+  
+  
+  # Create the total detections figure
+  fig_totaldet_data %>%
+    ggplot(aes(x = detections, y = fct_reorder(species, detections))) +
+    geom_col(fill = "gray30") +
+    geom_text(aes(label = detections), hjust = -0.2, size = 3) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+    theme_classic() +
+    labs(
+      x = "Total detections",
+      y = NULL,
+      title = title
+    )
+  
+  # Save the figure
+  ggsave(paste0("./figures/arrays/", LU, "_independent_detections.png"), width = 8, height = 5, dpi = 500) 
+
+  
+    # Create the total detections figure
+  fig_totaldet_data %>%
+    ggplot(aes(x = naiveocc, y = fct_reorder(species, naiveocc))) +
+    geom_col(fill = "gray30") +
+    geom_text(aes(label = round(naiveocc, 2)), hjust = -0.2, size = 3) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+    theme_classic() +
+    labs(
+      x = "Naive occupancy",
+      y = NULL,
+      title = title
+    )
+
+  # Save the figure
+  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy.png"), width = 8, height = 5, dpi = 500) 
+}
+# end for loop
+```
+
+
+
+
+
+
+
+# 4. Independent detections per repeat sample:
+
+```{r}
+for(LU in c("LU2", "LU3")){
+    
+  fig_paireddet_data <- totaldet %>% 
+    
+    filter(array == LU) %>%
+    
+    filter(site %in% sites_to_plot) %>%
+    
+      # Group together a few similar species
+      mutate(species = case_when(
+        species %in% human_species ~ "human (various)",
+        species %in% unknown_species ~ "unknown (various)",
+        TRUE ~ species)) %>%
+      
+      filter(!species %in% c("staff", 
+                             "other", 
+                             "other birds",
+                             "human (various)",
+                             "unknown (various)")) %>%
+    
+    group_by(array, array_visit, species) %>%
+    
+    summarize(detections = sum(detections),
+              camera_days = sum(camera_days),
+              present_sites = sum(presence), 
+              total_sites = n()) %>%
+    
+    mutate(naiveocc = present_sites / total_sites,
+           detections_per_effort = detections/camera_days * 100,
+           array_visit = str_replace(array_visit, paste0(LU, "_"), ""))
+  
+  
+  ###################
+  # plot adjusted for effort
+  ggplot(fig_paireddet_data, aes(x = detections_per_effort, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c(2024, 2021)))) +
+      
+      geom_bar(stat = "identity",
+               position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021", "2024")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +  # Removes whitespace on the left
+  
+      theme_classic() + 
+    
+      labs(y = "",
+           x = "Detections per 100 sampling days",
+           title = paste0(LU, 
+                          ' (', 
+                          subset(lu_classification, array == LU)$classification,
+                          ')'),
+           fill = "Survey Year"
+      )
+
+  ggsave(paste0("./figures/arrays/", LU, "_detections_adjusted_2021_2024.png"), width = 7, height = 4)
+
+  
+  ###################
+  # Plot not adjusted for effort
+  ggplot(fig_paireddet_data, aes(x = detections, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c(2024, 2021)))) +
+      
+      geom_bar(stat = "identity",
+               position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021", "2024")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +  # Removes whitespace on the left
+  
+      theme_classic() + 
+    
+      labs(y = "",
+           x = "Total detections",
+           title = paste0(LU, 
+                          ' (', 
+                          subset(lu_classification, array == LU)$classification,
+                          ')'),
+           fill = "Survey Year"
+      )
+
+  ggsave(paste0("./figures/arrays/", LU, "_detections_2021_2024.png"), width = 7, height = 4)
+  
+  
+  
+  
+  ###################
+  # Plot naive occupancy
+  ggplot(fig_paireddet_data, aes(x = naiveocc, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c(2024, 2021)))) +
+      
+      geom_bar(stat = "identity",
+               position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021", "2024")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +  # Removes whitespace on the left
+  
+      theme_classic() + 
+    
+      labs(y = "",
+           x = "Naive occupancy",
+           title = paste0(LU, 
+                          ' (', 
+                          subset(lu_classification, array == LU)$classification,
+                          ')'),
+           fill = "Survey Year"
+      )
+
+  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy_2021_2024.png"), width = 7, height = 4)
+}  
+```
+
+
+
+
+# 5. Other mammal figures
+
+A few quick figures to look at the detection data in other ways
 
 First create a vector of the list of mammals to use for quick data visualization/exploration.
 
@@ -170,7 +475,9 @@ mammals <- c('White-tailed deer',
              'Long-tailed weasel')
 ```
 
-Now plot it: 
+## 5.1. Total independent detections
+
+Plot it: 
 
 ```{r graph mammal detections}
 # remove NAs and select just images with mammals first then pipe new data into ggplot
@@ -181,7 +488,7 @@ det_graph <- indet %>%
          array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
 
   # remove less useful species
-  filter(species %in% tolower(mammals)) %>% 
+  #filter(species %in% tolower(mammals)) %>% 
   
   # get the number of individual detections per species to add to graph
   group_by(species) %>% 
@@ -194,227 +501,162 @@ det_graph <- indet %>%
          aes(x = species)) +
   
   # create bar graph of the counts of each spp in the data
-  geom_bar(aes(fill = species)) +
+  geom_bar() +
   
   # add the number of detections above each bar using the variable n we calculated earlier
   geom_text(aes(label = n,
-                y = n + 50),
-            size = 4) +
+                y = n + 100),
+            size = 3) +
   
   # change y axis label
-  labs(y = 'Number of independent detections') +
+  labs(y = 'Detections',
+       x = "", 
+       title = "Total detections for 2024-2025 sampling year (LU2, LU3, LU8)") +
   
   # change breaks for y axis
-  scale_y_continuous(breaks = seq(0,3500, by = 250)) +
+  scale_y_continuous(breaks = seq(0,3500, by = 250),
+                     expand = expansion(mult = c(0, 0.05))) +
+  
+  theme_classic() + 
   
   # change theme elements
-  theme(axis.text.x = element_text(angle = 90,
-                                   vjust = 0.5,
+  theme(axis.text.x = element_text(angle = 45,
                                    hjust = 1,
-                                   size = 14),
-        axis.title = element_text(size = 16),
-        axis.ticks.x = element_blank(),
-        panel.grid = element_blank()) 
+                                   vjust = 1),
+        panel.grid = element_blank())
+  
 
 # print graph
 det_graph
 
 ```
 
-If we want to save the plot for easier viewing later we can use the code below
+If we want to save the plot for easier viewing later we can use the code below:
 
 ```{r save det_graph, eval=FALSE}
 
 # save graph as jpeg (can also save as tiff, png, pdf by changing the file extension) but don't use .tiff in the github repo it takes up too much space and causes issues
-ggsave('2024_indv_det_graph.jpeg',
+ggsave('./figures/total_detections_2024-2025.png',
        det_graph,
-       path = 'figures',
-       width = 12,
-       height = 10,
+       width = 8,
+       height = 5,
        units = 'in',
        dpi = 600)
 
 ```
 
-## 1.4. Independent detections per LU
 
-let's also create one that graphs each LU in it's own panel using facet_wrap
-
-```{r det graph LUs}
-# let's also create one that graphs each LU in it's own panel using facet_wrap
-det_plot_LUs <- indet %>% 
-  
-  # This query should pull out only the 2024-2025 data from these arrays :)
-  filter(year >= 2024,
-         array %in% c("LU4", "LU2", "LU3", "LU8")) %>%
-  
-  # remove less useful species
-  filter(species %in% tolower(mammals)) %>% 
-  
- # group by array and species to calculate dets per spp per LU
- group_by(array, species) %>% 
-  
-  # calculate a column with unique accounts of each species
-  reframe(count = n_distinct(event_id)) %>% 
-  
-  # pipe to ggplot and set aesthetics mapping
-  ggplot(aes(x = reorder(species, count), y = count)) +
-  
-  # plot as bar graph
-  geom_col() +
-  
-  # plot each LU in own panel
-  facet_wrap(vars(array)) +
-  
-  # add the number of detections at the end of each bar
-  geom_text(aes(label = count),
-            color = "black",
-            size = 3,
-            hjust = 0.2,
-            vjust = -0.3) +
-  
-  # label x and y axis with informative titles
-  labs(x = 'Species',
-       y = 'Number of Independent (30 min) Detections') +
-  
-  # add title to plot with LU name
-  
-  #ggtitle("LU21 Detections")+
-  
-  # set the theme
-  theme_classic() +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.text.x = element_text(angle = 90,
-                                   vjust = 0.5,
-                                   hjust = 1,
-                                   size = 12))
-
-# view plot
-det_plot_LUs
-```
-
-We can also save this plot if we want it for reports etc. 
-
-```{r, eval = FALSE}
-# save this plot
-
-ggsave('figures/OSM_ind_det_per_LU_2023.jpg',
-       det_plot_LUs,
-       dpi = 600,
-       width = 10,
-       height = 12,
-       units = 'in')
-```
-
-
-
-## 1.5. Naive occupancy by species/array
-
-Based on total detections what is the naive occupancy?
-
-```{r fig.height=8, fig.width=10}
-# Naive occupancy
-fig_naiveocc <- totaldet %>%
-  
-  group_by(species, array) %>%
-  
-  summarize(presence = sum(presence), 
-            total = n(),
-            naive_occ = presence/total) %>%
-  
-  ggplot(., aes(x = array)) + 
-  
-    geom_bar(aes(y = naive_occ), stat = "identity", fill = "grey50") +  # Total sites in grey
-  
-    #geom_bar(aes(y = n_present), stat = "identity", fill = "firebrick") +  # Present sites in red
-  
-    geom_text(aes(y = naive_occ + 0.1, label = round(naive_occ, 2)), size = 2.7, fontface = "italic") +  # Label above bars
-  
-    theme_bw() + 
-  
-    facet_wrap(~species, scales = 'fixed') +
-  
-    labs(x = "array",
-         y = "naive occupancy") + 
-    
-
-    theme(
-         axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
-         strip.background = element_blank(),  # Remove facet background
-         strip.text = element_text(face = "bold", size = 10)
-         ) + 
-    
-    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))  # Remove bottom space, keep small top space
-
-fig_naiveocc
-```
-
-## 1.6. Monthly presence:
-
-Let's also try to plot the presence data at least for each species so we can see which species we likely have enough data for to model
-
-```{r plot prop month dets}
-
-# first reformat the data so species presence is a column
-proportional_detection_plot <- monthlyprop %>%
-  
-  pivot_longer(cols = c('black_bear':'wolverine'),
-               names_to = 'species_presence',
-               values_to = 'months_present') %>% 
-  
-  select(site, array, species_presence, months_present) %>% 
-  
-  ggplot(aes(x = site, y = months_present, fill = array)) +
-  
-  # plot as bars
-  geom_col() +
-  
-  # viridis for colorblind :)
-  scale_fill_viridis_d() +
-  
-  labs(y = "Months present", 
-       x = "Site") + 
-  
-  scale_y_continuous(breaks = seq(0, 14, 2),
-                     expand = c(0, 0)) +
-  
-  # use facet wrap to generate separate plots for each species
-  facet_wrap(vars(species_presence)) + 
-  
-  theme_bw() + 
-  
-  theme(axis.text.x = element_blank(),
-        panel.grid = element_blank())  # remove x-axis labels
-
-# view plot
-proportional_detection_plot
-```
-
-If we want to save the plot for easier viewing later we can use the code below
-
-```{r save plot prop month dets, eval = FALSE}
-
-# save graph as jpeg (can also save as tiff, png, pdf by changing the file extension)
-ggsave('OSM_proportional_detections_2024.jpeg',
-       proportional_detection_plot,
-       path = 'figures',
-       width = 12,
-       height = 8,
-       units = 'in',
-       dpi = 600)
-```
-
-
-
-********* NEEDS TO BE ADDED FOR FYE DEADLINE
-
-## 1.7. Change in naive occupancy for LU2 and LU3 (MARISSA)
-
-Will need to re-import data, or just move the `filter(year>=2024)` etc. queries to the individual figures above so the full data is present. 
+## 5.2. TOTAL stats per LU. 
 
 ```{r}
+# Create the dataset for the figure
+fig_totaldet_data <- totaldet %>%
+    
+    filter(site %in% sites_to_plot) %>%
+    
+    # Group together a few similar species
+    mutate(species = case_when(
+      species %in% human_species ~ "human (various)",
+      species %in% unknown_species ~ "unknown (various)",
+      TRUE ~ species)) %>%
+    
+    # Remove the species we don't want in the figure
+    filter(!species %in% c("staff", 
+                           "other", 
+                           "other birds")) %>%
+    
+    left_join(lu_classification, by = "array") %>%
 
+    group_by(species, array, array_visit, classification) %>%
+    
+    # How many rows (detections) per species?
+    summarize(detections = sum(detections),
+              effort = sum(camera_days),
+              present_sites = sum(presence), 
+              total_sites = n()) %>%
+    
+    mutate(naiveocc = present_sites / total_sites,
+           detections_per_effort = detections/effort*100) %>%
+  
+    ungroup()
+
+
+
+# Detections by array
+fig_totaldet_data %>%
+  
+  # Set Classification order
+  mutate(classification = factor(classification, 
+                                 levels = c("low development", "pre in situ", "in situ", "mine"))) %>%
+  
+  # Arrange by classification to group LUs together on the x-axis
+  arrange(classification, array_visit) %>%
+  
+  # Lock in the order of array_visit based on the arrange step above
+  mutate(array_visit = factor(array_visit, levels = unique(array_visit))) %>%  
+  
+  # Plot
+  ggplot(aes(x = array_visit, y = detections_per_effort, fill = classification)) +
+    geom_col() +
+    facet_wrap(~ species, scales = "free_y") +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6),
+      strip.background = element_blank(),
+      panel.grid = element_blank()
+    ) + 
+    labs(x = "Landscape Unit",
+         y = "Detections per 100 sampling days",
+         fill = "Landscape \nClassification")
+
+
+ggsave("./figures/total_detections_per_array.png", width = 18, height = 11)
+
+
+
+
+
+# Naive occupancy
+fig_totaldet_data %>%
+  
+  # Set Classification order
+  mutate(classification = factor(classification, 
+                                 levels = c("low development", "pre in situ", "in situ", "mine"))) %>%
+  
+  # Arrange by classification to group LUs together on the x-axis
+  arrange(classification, array_visit) %>%
+  
+  # Lock in the order of array_visit based on the arrange step above
+  mutate(array_visit = factor(array_visit, levels = unique(array_visit))) %>%  
+  
+  # Plot
+  ggplot(aes(x = array_visit, y = naiveocc, fill = classification)) +
+    geom_col() +
+    facet_wrap(~ species, scales = "free_y") +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+    theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6),
+      strip.background = element_blank(),
+      panel.grid = element_blank()
+    ) + 
+    labs(x = "Landscape Unit",
+         y = "Naive occupancy",
+         fill = "Landscape \nClassification")
+
+
+ggsave("./figures/naiveoccupancy_per_array.png", width = 18, height = 11)
 ```
+
+
+
+
+
+
+
 
 
 
@@ -422,16 +664,318 @@ Will need to re-import data, or just move the `filter(year>=2024)` etc. queries 
 
 ## 2.1. Covariate histogram by LU
 
-First, well pads: 
+First, make the data:
 
 ```{r}
-covariates %>%
+fig_covariate_data <- covariates %>%
+  
+  left_join(lu_classification, by = "array") %>%
+  mutate(classification = factor(classification, 
+                                 levels = c("low development", "pre in situ", "in situ", "mine"))) %>%
   
   # Remove the early, partial sample of LU2 and LU3 (the only arrays from 2022)
-  filter(array_year > 2022,
+  filter(array_year >= 2022,
          # Buffer 500m is the geometric mean of our sampled scales, let's use it. 
          buffer_dist == 500) %>%
   
-  ggplot., 
+  select(array:buffer_dist, classification, osm_industrial,
+         seismic_lines_3D, seismic_lines_conventional, seismic_total, 
+         wells_active, wells_inactive, wells_total, 
+         cfi_with_vegedges, 
+         pipe_trans, roads, fire_total, harvest_total)
+  
 ```
 
+Start with seismic lines:
+
+```{r}
+fig_covariate_data %>%
+  
+ggplot(aes(x = seismic_total, group = classification, fill = classification)) +
+    geom_density(alpha = 0.4, color = "white", size = 0.2) + # Transparent overlapping blobs
+    scale_fill_viridis_d() +
+    theme_classic() +
+    labs(x = "Seismic Line Footprint (%)",
+         y = "Density",
+         fill = "Landscape \nClassification")
+```
+
+This was a cool idea but kind of ugly. Back to histograms:
+
+```{r}
+fig_covariate_data %>%
+  
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+
+ggplot(aes(x = seismic_total, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Seismic line footprint (%)",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/seismic_histogram_all_arrays.png", width = 10, height = 5)
+```
+
+Well pads:
+
+```{r}
+fig_covariate_data %>%
+
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+  
+  
+ggplot(aes(x = wells_total, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Well pad footprint",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/wellpad_histogram_all_arrays.png", width = 10, height = 5)
+
+```
+
+Harvest areas:
+
+```{r}
+fig_covariate_data %>%
+  
+  
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+  
+
+ggplot(aes(x = harvest_total, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Timber harvest footprint",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/timberharvest_histogram_all_arrays.png", width = 10, height = 5)
+
+```
+
+Industrial facilities: 
+
+```{r}
+fig_covariate_data %>%
+  
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+
+ggplot(aes(x = osm_industrial, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array, ncol = 4) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Industrial processing facilities",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/osmindustrial_histogram_all_arrays.png", width = 10, height = 5)
+
+```
+
+
+Cumulative footprint:
+
+```{r}
+fig_covariate_data %>%
+  
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+
+ggplot(aes(x = cfi_with_vegedges, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array, ncol = 4) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Cumulative industrial footprint",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/cfi_histogram_all_arrays.png", width = 10, height = 5)
+
+```
+
+
+
+Pipelines and transmission lines:
+
+```{r}
+fig_covariate_data %>%
+  
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+
+ggplot(aes(x = pipe_trans, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array, ncol = 4) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Pipelines & transmission lines",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/pipeline_histogram_all_arrays.png", width = 10, height = 5)
+
+```
+
+
+
+
+
+Roads:
+
+```{r}
+fig_covariate_data %>%
+  
+    
+  # 1. Rank each array within its own classification group
+  group_by(classification) %>%
+  mutate(group_rank = as.numeric(factor(array))) %>%
+  ungroup() %>%
+  
+  # 2. Arrange by rank first, then by classification
+  # This creates the order: Rank1-Low, Rank1-Pre, Rank1-InSitu, Rank1-Mine, Rank2-Low...
+  arrange(group_rank, classification) %>%
+  
+  # 3. Lock in this specific sequence for the facets
+  mutate(array = fct_inorder(array)) %>%
+  
+
+ggplot(aes(x = roads, fill = classification)) +
+    geom_histogram(bins = 15) +
+    scale_fill_viridis_d() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+
+    # Facet by classification to separate the distributions
+    facet_wrap(~ array, ncol = 4) +
+    
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          panel.grid = element_blank()) +
+    labs(x = "Roads",
+         y = "Number of sites",
+         fill = "Landscape \nClassification")
+
+ggsave("./figures/covariates/road_histogram_all_arrays.png", width = 10, height = 5)
+```
