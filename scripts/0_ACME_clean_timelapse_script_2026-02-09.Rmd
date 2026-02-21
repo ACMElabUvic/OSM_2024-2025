@@ -89,7 +89,7 @@ The ACME netdrive location varies between Apple/Windows users, and between Windo
 
 ```{r script_parameters}
 my_netdrive <- 'Z:/3. ACME Projects/1. Alberta/OSM/2024-2025' # the path to the netdrive on your device
-my_netdrive <- 'C:/Users/aidanbrushett/Desktop/QAQC done'
+#my_netdrive <- 'C:/Users/aidanbrushett/Desktop/QAQC done'
 
 # Do you want to automatically append a blank noon photo (with snow) at sites where noon photos are missing? See Section 5.  
 autofix_one_image_per_day <- FALSE
@@ -1447,7 +1447,7 @@ with_dir(new = my_netdrive,
 This section will blur all non-staff photos that depict humans. This is a requirement for privacy and data sharing. **Currently, this step is IRREVERSIBLE (which is the whole point).** As a result, there are a couple safeguards to prevent you from accidentally running it. First, you need to set `blur_human_use` in Section 1 to `TRUE`. The default is `FALSE`. Second, when running the code you will be prompted to enter 'yes' in your console to proceed. This might create issues while knitting so for now the chunk is set to `eval=FALSE`. 
 
 First, we will identify the list of photos we want to blur and their file paths:
-```{r}
+```{r, eval = FALSE}
     OSM_2024_human_to_blur <- OSM_2024_data_clean %>%
       
       filter(species %in% (c('Human', # human images to blur
