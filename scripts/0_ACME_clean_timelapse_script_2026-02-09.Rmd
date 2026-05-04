@@ -89,7 +89,6 @@ The ACME netdrive location varies between Apple/Windows users, and between Windo
 
 ```{r script_parameters}
 my_netdrive <- 'Z:/3. ACME Projects/1. Alberta/OSM/2024-2025' # the path to the netdrive on your device
-my_netdrive <- 'C:/Users/aidanbrushett/Desktop/QAQC done'
 
 # Do you want to automatically append a blank noon photo (with snow) at sites where noon photos are missing? See Section 5.  
 autofix_one_image_per_day <- FALSE
@@ -107,7 +106,10 @@ blur_human_use <- FALSE
 
 ```{r, eval = TRUE}
 OSM_2024_deploy_raw <- read_csv("./data/raw/OSM_deployment_2024.csv", 
-                                col_types = cols(end_date = col_date())) %>%
+                                col_types = cols(
+    start_date = col_date(format = "%m/%d/%Y"),
+    end_date   = col_date(format = "%m/%d/%Y")
+  )) %>%
   
       drop_na(site) %>%
   
@@ -191,8 +193,7 @@ ggplot(OSM_2024_deploy, aes(color = array)) +
 Now that this data is cleaned up we should save it to the data/processed folder in case we need the cleaned version later so we don't have to repeat the above steps.
 
 ```{r export, eval = FALSE}
-write_csv(OSM_2024_deploy,
-          './data/raw/OSM_deployment_2024.csv')
+write_csv(OSM_2024_deploy, "./data/processed/OSM_deployment_2024.csv")
 
 rm(OSM_2024_deploy_raw)
 ```
@@ -202,7 +203,7 @@ rm(OSM_2024_deploy_raw)
 > Set to eval=FALSE as default. Run this manually in your console if you're running the script in multiple steps or over multiple days. 
 
 ```{r reimport, eval= TRUE}
-OSM_2024_deploy <- read_csv('data/raw/OSM_deployment_2024.csv') %>% 
+OSM_2024_deploy <- read_csv("./data/processed/OSM_deployment_2024.csv") %>% 
   # make sure site re-reads in as a factor to compare with other data sets
   mutate(site = as.factor(site))
 ```
@@ -755,7 +756,7 @@ error_framecount_low <- OSM_2024_data %>%
   # If the event total indicates a species is present, but the animal is never actually present in a 
   
   mutate(
-    error = "Group count exceeds summed frame counts, logically impossible."
+    error = "Group count exceeds summed frame counts."
   )
 
 ```
@@ -1093,7 +1094,7 @@ unknown_images_to_verify <- OSM_2024_data %>%
 Then let's export these to the working directory of your choice for review. This could be the Github repo (do not push them), the Netdrive, or your C: drive! This step can be overwritten as many times as needed. 
 
 ```{r}
-my_errorchecking_wd <- "C:/"
+my_errorchecking_wd <- "C:/Users/sdaman/OneDrive - University of Victoria/Documents/GitHub/OSM_2024-2025"
 # my_errorchecking_wd <- getwd()
 # my_errorchecking_wd <- my_netdrive
 
@@ -1236,7 +1237,7 @@ if(autofix_one_image_per_day == TRUE) {     # select/save one image per data and
   cat(red("Type 'yes' to continue: \n"))
   proceed <- readline(prompt = "")
   
-  if(tolower(proceed) == 'yes'){
+  if(tolower(proceed) == 'no'){
     
     
     OSM_2024_data <- OSM_2024_data %>%
@@ -1351,7 +1352,7 @@ In case someone wants all of the cleaned Timelapse data for a project:
 
 # 1. Into my working data folder for the RProject
 write.csv(OSM_2024_data_clean %>% mutate(datetime = paste0(" ", format(datetime, format = "%Y-%m-%d %H:%M:%S"))), 
-          file = 'data/raw/OSM_timelapse_2024.csv',
+          file = './data/raw/OSM_timelapse_2024.csv',
           na = "", row.names = FALSE)
 
 # 2. Into an archive on the netdrive

@@ -94,7 +94,7 @@ Let's plot the camera operability with `ggplot()` to look at this
 ```{r camera operability}
 
 # if starting from this point read in data
-deploy <- read_csv('data/raw/OSM_deployment_2024.csv') %>% 
+deploy <- read_csv('./data/raw/OSM_deployment_2024.csv') %>% 
   
   drop_na(site) %>%
   
@@ -197,7 +197,9 @@ osm_deploy_multi_year <- list.files(path="./data/raw/",
                                full.names = TRUE) %>%
       map_dfr(.,
           ~read_csv(.x,
-                    col_types = cols(end_date = col_date()))
+                    col_types = cols(
+                      start_date = col_date(format = "%m/%d/%Y"),
+                      end_date   = col_date(format = "%m/%d/%Y")))
                    ) %>%
   
       drop_na(site) %>%
@@ -377,7 +379,7 @@ osm_operating <- osm_operating %>%
          month = month(date))
                                  
 # Save the operating days file
-#write_csv(osm_operating, "./data/raw/OSM_operating_days.csv")
+# write_csv(osm_operating, "C:/Users/sdaman/OneDrive - University of Victoria/Documents/GitHub/OSM_2024-2025/data/raw/OSM_operating_days.csv")
 ```
 
 

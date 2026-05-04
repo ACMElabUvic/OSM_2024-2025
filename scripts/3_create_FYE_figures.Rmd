@@ -153,7 +153,7 @@ operating %>%
 Save it: 
 
 ```{r}
-ggsave("./figures/OSM_operability_allyears.png", width = 7, height = 4)
+ggsave("./figures/OSM_operability_allyears.jpeg", width = 7, height = 4)
 ```
 
 Second, just the 2024-2025 OSM operating history:
@@ -183,7 +183,7 @@ operating %>%
 Save it: 
 
 ```{r}
-ggsave("./figures/OSM_operability_2024-2025.png", width = 7, height = 4)
+ggsave("./figures/updated/OSM_operability_2024-2025.png", width = 7, height = 4)
 ```
 
 
@@ -312,7 +312,7 @@ for(LU in unique(totaldet$array_visit)){
     )
   
   # Save the figure
-  ggsave(paste0("./figures/arrays/", LU, "_independent_detections.png"), width = 8, height = 5, dpi = 500) 
+  ggsave(paste0("./figures/arrays/", LU, "_independent_detections.jpeg"), width = 8, height = 5, dpi = 500) 
 
   
     # Create the total detections figure
@@ -329,7 +329,7 @@ for(LU in unique(totaldet$array_visit)){
     )
 
   # Save the figure
-  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy.png"), width = 8, height = 5, dpi = 500) 
+  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy.jpeg"), width = 8, height = 5, dpi = 500) 
 }
 # end for loop
 ```
@@ -402,7 +402,7 @@ for(LU in c("LU2", "LU3")){
            fill = "Survey Year")
   
   # Save plot
-  ggsave(paste0("./figures/arrays/", LU, "_detections_adjusted_2021_2024.png"), width = 7, height = 4)
+  ggsave(paste0("./figures/arrays/", LU, "_detections_adjusted_2021_2024.jpeg"), width = 7, height = 4)
 
   
   ###################
@@ -429,7 +429,7 @@ for(LU in c("LU2", "LU3")){
            fill = "Survey Year")
 
   # Save plot
-  ggsave(paste0("./figures/arrays/", LU, "_detections_2021_2024.png"), width = 7, height = 4)
+  ggsave(paste0("./figures/arrays/", LU, "_detections_2021_2024.jpeg"), width = 7, height = 4)
   
   
   ###################
@@ -457,7 +457,7 @@ for(LU in c("LU2", "LU3")){
            fill = "Survey Year")
 
   # Save plot
-  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy_2021_2024.png"), width = 7, height = 4)
+  ggsave(paste0("./figures/arrays/", LU, "_naiveoccupancy_2021_2024.jpeg"), width = 7, height = 4)
 }
 ```
 
@@ -527,7 +527,7 @@ indet %>%
          x = "", 
          title = "Total detections for 2024-2025 sampling year (LU2, LU3, LU8)") +
     # change breaks for y axis
-    scale_y_continuous(breaks = seq(0,3500, by = 250),
+    scale_y_continuous(breaks = seq(0,5000, by = 250),
                        expand = expansion(mult = c(0, 0.05))) +
     theme_classic() + 
     # change theme elements
@@ -542,7 +542,7 @@ If we want to save the plot for easier viewing later we can use the code below:
 ```{r save det_graph}
 
 # save graph as jpeg (can also save as tiff, png, pdf by changing the file extension) but don't use .tiff in the github repo it takes up too much space and causes issues
-ggsave('./figures/total_detections_2024-2025.png',
+ggsave('./figures/total_detections_2024-2025.jpeg',
        width = 8,
        height = 5,
        units = 'in',
@@ -608,7 +608,7 @@ fig_totaldet_data %>%
     geom_col() +
     facet_wrap(~ species, scales = "free_y") +
     scale_fill_viridis_d() +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6),
@@ -620,7 +620,7 @@ fig_totaldet_data %>%
          fill = "Landscape \nClassification")
 
 # Save the figure
-ggsave("./figures/total_detections_per_array.png", width = 18, height = 11)
+ggsave("./figures/total_detections_per_array.jpeg", width = 18, height = 11)
 
 
 
@@ -644,7 +644,7 @@ fig_totaldet_data %>%
     geom_col() +
     facet_wrap(~ species, scales = "free_y") +
     scale_fill_viridis_d() +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
     theme_bw() +
     theme(
       axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6),
@@ -656,7 +656,7 @@ fig_totaldet_data %>%
          fill = "Landscape \nClassification")
 
 # Save the figure
-ggsave("./figures/naiveoccupancy_per_array.png", width = 18, height = 11)
+ggsave("./figures/naiveoccupancy_per_array.jpeg", width = 18, height = 11)
 ```
 
 
@@ -738,7 +738,7 @@ ggplot(aes(x = seismic_total, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/seismic_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/seismic_histogram_all_arrays.jpeg", width = 10, height = 5)
 ```
 
 Well pads:
@@ -777,7 +777,7 @@ ggplot(aes(x = wells_total, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/wellpad_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/wellpad_histogram_all_arrays.jpeg", width = 10, height = 5)
 
 ```
 
@@ -817,7 +817,7 @@ ggplot(aes(x = harvest_total, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/timberharvest_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/timberharvest_histogram_all_arrays.jpeg", width = 10, height = 5)
 
 ```
 
@@ -856,7 +856,7 @@ ggplot(aes(x = osm_industrial, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/osmindustrial_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/osmindustrial_histogram_all_arrays.jpeg", width = 10, height = 5)
 
 ```
 
@@ -896,7 +896,7 @@ ggplot(aes(x = cfi_with_vegedges, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/cfi_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/cfi_histogram_all_arrays.jpeg", width = 10, height = 5)
 
 ```
 
@@ -937,7 +937,7 @@ ggplot(aes(x = pipe_trans, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/pipeline_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/pipeline_histogram_all_arrays.jpeg", width = 10, height = 5)
 
 ```
 
@@ -980,5 +980,5 @@ ggplot(aes(x = roads, fill = classification)) +
          y = "Number of sites",
          fill = "Landscape \nClassification")
 
-ggsave("./figures/covariates/road_histogram_all_arrays.png", width = 10, height = 5)
+ggsave("./figures/covariates/road_histogram_all_arrays.jpeg", width = 10, height = 5)
 ```

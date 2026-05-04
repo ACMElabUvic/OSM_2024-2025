@@ -655,14 +655,14 @@ covs <- covs %>%
 ## 5.4. Save the data:
 
 ```{r}
-write_csv(covs, "./data/processed/OSM_site_covariates_2021-2024.csv")
+write_csv(covs, "./data/processed/OSM_site_covariates_2021-2025.csv")
 ```
 
 
 Export to a shapefile for data requests:
 
 ```{r}
-covs <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv")
+covs <- read_csv("./data/processed/OSM_site_covariates_2021-2025.csv")
 
 
 # Convert to sf using existing UTM coordinates
