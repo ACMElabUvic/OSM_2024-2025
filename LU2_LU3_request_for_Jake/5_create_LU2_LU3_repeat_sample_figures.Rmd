@@ -1,0 +1,350 @@
+---
+title: "Visualize OSM mammal data"
+author: "Marissa Dyck, modified by Aidan Brushett"
+date: "2025-11-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R and RStudio
+
+Before starting you should ensure you have the latest version of R and RStudio downloaded. This code was generated under R version 4.2.3 and with RStudio version 2024.04.2+764.    
+
+You can download R and RStudio [HERE](https://posit.co/download/rstudio-desktop/)   
+
+
+## R markdown
+
+This script is written in R markdown and thus uses a mix of coding markup languages and R. If you are planning to run this script with new data or make any modifications you will want to be familiar with some basics of R markdown.
+
+Below is an R markdown cheatsheet to help you get started,    
+[R markdown cheatsheet](https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf)    
+
+# 0. Setup
+
+## Install packages
+
+If you don't already have the following packages installed, use the code below to install them. *NOTE this will not run automatically as eval=FALSE is included in the chunk setup (i.e. I don't want it to run every time I run this code since I have the packages installed)
+
+```{r install packages, eval=FALSE}
+
+install.packages('tidyverse') 
+install.packages('withr') 
+```
+
+## Load libraries
+
+Then load the packages to your library.
+
+```{r libraries}
+rm(list=ls()) # start with a fresh global environment
+library(tidyverse) # data tidying, visualization, and much more; this will load all tidyverse packages, can see complete list using
+library(gt)
+```
+
+> Note: all the processing of response data was performed in script 1, and landscape data in script 2. We will use the products in ./data/processed/ for this script. 
+
+# 1. Response Variable figures (MODIFY FOR FYE DEADLINE AS NEEDED)
+
+## 1.1. Import data
+
+Let's read in the data from script 3. Importing the *entire* dataset means we can reuse this code for the data paper, or project-wide summaries as needed without major revision. 
+
+```{r}
+# Operability adjusted for snow cover
+operating <- read_csv("./data/processed/OSM_operating_days_2021-2024.csv")
+```
+
+
+```{r}
+# Independent detections
+indet <- read_csv("./data/processed/OSM_independent_detections_2021-2024.csv")
+```
+
+```{r}
+# Total detections and presence per site:
+totaldet <- read_csv("./data/processed/OSM_response_total_detections_per_effort_2021-2024.csv")
+```
+
+
+```{r}
+# Landscape covariates
+covariates <- read_csv("./data/processed/OSM_site_covariates_2021-2024.csv")
+```
+
+
+```{r}
+# Landscape unit classifications. 
+lu_classification <- read_csv("./data/raw/landscape_unit_land_use_classifications.csv")
+```
+
+What sites actually have camera data? We will ONLY use these sites for FYE figures. 
+This handles missing data from image tagging that we should track down later, but maybe after FYE. 
+
+```{r}
+sites_to_plot <- (unique(indet$site))
+```
+
+
+# 3. Independent detections and naive occupancy
+
+## 3.1. Identify focal species
+
+We'll identify some focal species (not used for now) and also bin some of the similar species categories. 
+
+```{r}
+# We will not use this for now
+focal_species <- tolower(c('Red squirrel',
+                   'Snowshoe hare', 
+                   'White-tailed deer',
+                   'Black bear',
+                   'Coyote',
+                   'Moose',
+                   'Lynx', 
+                   'Marten',
+                   'Wolverine',
+                   'Grey wolf',
+                   'Caribou',
+                   'Red fox', 
+                   'Fisher',
+                   'Long-tailed weasel',
+                   'Short-tailed weasel',
+                   'Otter',
+                   'Beaver',
+                   'Porcupine',
+                   'Cougar'
+                   ))
+
+human_species <- tolower(c('ATVer', 
+                   'Human',
+                   'Hunter',
+                   'Hiker',
+                   'Snowmobiler'
+                   ))
+
+unknown_species <- tolower(c('Unknown',
+                     'Unknown canid', 
+                     'Unknown bird',
+                     'Unknown ungulate',
+                     'Unknown deer',
+                     'Unknown mustelid',
+                     'Unknown bear'))
+```
+
+# 4. Independent detections per repeat sample:
+
+```{r}
+# Iterate through each LU to generate array-wise comparisons
+for(LU in c("LU2", "LU3")){
+  
+  # Data Wrangling: Filter and aggregate detection data
+  fig_paireddet_data <- totaldet %>% 
+    
+    # Isolate the current LU across all years
+    filter(array == LU) %>%
+    filter(site %in% sites_to_plot) %>%
+    
+    # Group by survey year and species to calculate summary statistics
+    group_by(array, array_visit, species) %>%
+    
+    summarize(detections = sum(detections),
+              camera_days = sum(camera_days),
+              present_sites = sum(presence), 
+              total_sites = n(),
+              .groups = "drop") %>% # Ungroup to prevent downstream errors
+    
+    # Calculate derived ecological metrics
+    mutate(naiveocc = present_sites / total_sites, # Proportion of sites occupied
+           detections_per_effort = detections/camera_days * 100, # Detection rate per 100 days
+           # Extract year from the visit ID (e.g., "LU2_2021" becomes "2021")
+           array_visit = str_replace(array_visit, paste0(LU, "_"), "")) %>%
+    
+    # Only for the species that actually have detections
+    filter(species %in% tolower(focal_species)) %>%
+    
+    # Keep only speices that have actually been seen
+    group_by(species) %>%
+    filter(sum(detections_per_effort)>0) %>%
+    
+    #update to fiscal year for accuracy:
+    mutate(
+      array_visit = paste0(array_visit, "/", str_sub(as.numeric(array_visit) + 1, -2)),
+      species = str_to_sentence(species)
+    )
+  ###################
+  # PLOT 1: Adjusted for Effort
+  # Standardizing detections by camera-days accounts for variation in sampling duration
+  ggplot(fig_paireddet_data, aes(x = detections_per_effort, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c("2024/25", "2021/22")))) +
+      # Basic bar chart
+      geom_bar(stat = "identity", position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021/22", "2024/25")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  
+      theme_bw() + 
+      theme(panel.grid = element_blank()) +
+      # Title should have LU name and land-use classification appended together    
+      labs(y = "",
+           x = "Detections per 100 sampling days",
+           title = LU,
+           fill = "Survey year")
+  
+  # Save plot
+  ggsave(paste0("./LU2_LU3_request_for_Jake/", LU, "_detections_adjusted_2021_2024.jpeg"), width = 7, height = 4)
+
+  
+  ###################
+  # PLOT 2: Raw Detections (Not adjusted for effort)
+  # Visualizes total volume of detections recorded per species
+  ggplot(fig_paireddet_data, aes(x = detections, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c("2024/25", "2021/22")))) +
+      # Basic bar chart
+      geom_bar(stat = "identity", position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021/22", "2024/25")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  
+      theme_bw() + 
+      theme(panel.grid = element_blank()) +
+      # Title should have LU name and land-use classification appended together    
+      labs(y = "",
+           x = "Total detections",
+           title = paste0(LU), 
+           fill = "Survey year")
+
+  # Save plot
+  ggsave(paste0("./LU2_LU3_request_for_Jake/", LU, "_detections_2021_2024.jpeg"), width = 7, height = 4)
+  
+  
+  ###################
+  # PLOT 3: Naive Occupancy
+  # Visualizes spatial distribution (presence/absence) across the array
+  ggplot(fig_paireddet_data, aes(x = naiveocc, 
+                  y = species, 
+                  fill = factor(array_visit, levels = c("2024/25", "2021/22")))) +
+      # Basic bar chart
+      geom_bar(stat = "identity", position = "dodge") +
+    
+      scale_fill_manual(values = c("grey60", "grey20"),
+                        breaks = c("2021/22", "2024/25")) +
+    
+      scale_x_continuous(expand = expansion(mult = c(0, 0.05))) + 
+  
+      theme_bw() + 
+      theme(panel.grid = element_blank()) +
+      # Title should have LU name and land-use classification appended together    
+      labs(y = "",
+           x = "Naive occupancy",
+           title = paste0(LU),
+           fill = "Survey year")
+
+  # Save plot
+  ggsave(paste0("./LU2_LU3_request_for_Jake/", LU, "_naiveoccupancy_2021_2024.jpeg"), width = 7, height = 4)
+}
+```
+
+Make that into a table:
+
+```{r}
+  # Data Wrangling: Filter and aggregate detection data
+  data_paireddet <- totaldet %>% 
+  
+  filter(array %in% c("LU2", "LU3")) %>%
+    
+    # Isolate the current LU across all years
+    filter(site %in% sites_to_plot) %>%
+    
+    # Group by survey year and species to calculate summary statistics
+    group_by(array, array_visit, species) %>%
+    
+    summarize(detections = sum(detections),
+              camera_days = sum(camera_days),
+              present_sites = sum(presence), 
+              total_sites = n(),
+              .groups = "drop") %>% # Ungroup to prevent downstream errors
+    
+    # Calculate derived ecological metrics
+    mutate(naiveocc = present_sites / total_sites, # Proportion of sites occupied
+           detections_per_effort = detections/camera_days * 100, # Detection rate per 100 days
+           # Extract year from the visit ID (e.g., "LU2_2021" becomes "2021")
+           array_visit = str_replace(array_visit, "LU\\d+_", "")) %>%
+    
+    # Only for the species that actually have detections
+    filter(species %in% tolower(focal_species)) %>%
+    
+    # Keep only speices that have actually been seen
+    group_by(species) %>%
+    filter(sum(detections_per_effort)>0) %>%
+    
+    #update to fiscal year for accuracy:
+    mutate(
+      array_visit = paste0(array_visit, "/", str_sub(as.numeric(array_visit) + 1, -2))
+    )
+
+writexl::write_xlsx(data_paireddet, "./LU2_LU3_request_for_Jake/paired_detections_long_summary.xlsx")
+```
+
+Clean table: 
+
+```{r}
+for(i in c("LU2", "LU3")) {
+dataXX <- data_paireddet %>%
+  
+  filter(array == i) %>%
+# 1. Pivot the metrics into long format
+  pivot_longer(
+    cols = c(detections, camera_days, present_sites, total_sites, naiveocc, detections_per_effort),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  # 2. Pivot the array_visit into headers
+  pivot_wider(
+    names_from = array_visit,
+    values_from = value
+  ) %>%
+  
+  filter(metric %in% c("detections", "naiveocc", "detections_per_effort")) %>%
+  mutate(metric = case_when(
+    metric == "detections"            ~ "Total Detections",
+    metric == "naiveocc"              ~ "Naive Occupancy",
+    metric == "detections_per_effort" ~ "Detections per 100 Days",
+    TRUE                              ~ metric # Keeps other names as-is
+  )) %>%
+  
+  mutate(`Percent Change` = ((`2024/25` - `2021/22`) / `2021/22`) * 100) %>%
+  mutate(species = str_to_sentence(species)) %>%
+
+  # Hacky formatting:
+  # Insert blank row above each species
+  group_by(species) %>%
+  group_modify(~ {
+    # Create an empty row structure
+    blank_row <- .x[1, ]
+    blank_row[] <- NA
+    
+    # Assign species name to species_2
+    blank_row$species_2 <- .x$species[1]
+    
+    # Combine with original data
+    bind_rows(blank_row, .x)
+  }) %>%
+  ungroup() %>%
+  
+  rowwise() %>%
+  mutate(species = ifelse(is.na(array), species, NA))
+
+
+writexl::write_xlsx(dataXX, paste0("./LU2_LU3_request_for_Jake/", i, "_paired_detections_wide_summary.xlsx"))
+}
+```
+
