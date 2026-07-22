@@ -1,0 +1,176 @@
+---
+title: "Extract NDVI"
+author: "Aidan Brushett"
+date: "2025-06-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, eval = FALSE}
+library(remotes)
+install_github("ropensci/MODIStsp")
+```
+
+```{r}
+library(sf) # for points and buffering
+library(tidyverse)
+library(terra)
+#library(MODIStsp)
+rm(list = ls())
+```
+
+# 1. Read in the raw site coordinates:
+
+We want these separated so I won't bind them with purrr just yet. Clunky but versatile. 
+
+```{r}
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
+  
+  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912)
+
+
+# Sampled 2022 onwards
+#sites_osm_2022 <- sites_osm %>% 
+#  
+#  filter(array %in% c("LU13", "LU15", "LU21", "LU1",
+#                      "LU9", "LU16", "LU14", "LU22"))
+#
+# Sampled 2021 
+#sites_osm_2021 <- sites_osm %>% 
+#  
+#  filter(array %in% c("LU2", "LU3"))
+
+
+
+
+
+
+# buffer sites so that we can filter the landcover data and reduce file size
+sites_osm_buffered <- st_buffer(sites_osm, dist = 11000) %>%
+  
+  st_union()
+
+st_bbox(st_transform(sites_osm_buffered, crs = 4326))
+
+
+plot(sites_osm_buffered)
+
+st_write(sites_osm_buffered, "./data/input/modis_sites.shp", append = FALSE)
+
+```
+
+# 2. Read in the NDVI
+
+The NDVI layer used here was generated using the following javascript code in **Google Earth Engine**:
+
+```{javascript, eval = FALSE}
+var aoi = ee.Geometry.Rectangle([-115.22791, 54.46367, -109.91320, 57.65839]);
+Map.centerObject(aoi, 6);  // Zoom level 6 is usually good for this scale
+Map.addLayer(aoi, {color: 'red'}, 'AOI');
+
+
+// 2. Filter MODIS NDVI (MOD13A1 = 16-day NDVI, 500m resolution)
+var dataset = ee.ImageCollection('MODIS/061/MOD13A1')
+                  .filterDate('2020-05-15', '2024-09-15')
+                  .filter(ee.Filter.calendarRange(5, 9, 'month'))  // May to September
+                  .select('NDVI');
+
+// Select the NDVI collection from the dataset then clip to the area of interest
+var ndvi = dataset.select('NDVI').map(function(image) {
+  return image.clip(aoi);
+});
+
+//Take the mean of the NDVI image collection
+var ndvi_mean = ndvi.mean();
+
+// Set some color schemes and parameters for layers
+var ndviVis = {
+  min: 0,
+  max: 9000,
+  palette: [
+    'ffffff', 'ce7e45', 'df923d', 'f1b555', 'fcd163', '99b718', '74a901',
+    '66a000', '529400', '3e8601', '207401', '056201', '004c00', '023b01',
+    '012e01', '011d01', '011301'
+  ],
+};
+
+//Add to map
+Map.addLayer(ndvi_mean, ndviVis, 'NDVI Mean');
+Map.addLayer(ndvi, ndviVis, 'NDVI');
+
+
+
+//Export layer
+Export.image.toDrive({
+  image: ndvi_mean,
+  description: 'NDVI_Mean_Export',
+  folder: 'EarthEngineExports',          // Optional: change to desired folder
+  fileNamePrefix: 'NDVI_Mean_2020_2024', // Optional: change file name
+  region: aoi,                           // Your area of interest
+  scale: 500,                            // MODIS native resolution
+  maxPixels: 1e13
+});
+```
+
+Let's read in the raster that came from that script:
+
+```{r}
+# Modis stores integers that need to be re-scaled for the actual NDVI values
+
+ndvi_raw <- rast("data/input/NDVI_Mean_2020_2024.tif") * 0.0001
+
+plot(ndvi_raw)
+```
+
+Let's mask out the NDVI values that are below 0 (i.e., not vegetated):
+
+```{r}
+ndvi <- classify(ndvi_raw, rcl = matrix(c(-Inf, 0.1, NA), ncol=3, byrow=TRUE))
+
+plot(ndvi)
+```
+
+# 3. Extract NDVI 
+
+Currently set to suppress warnings about transforming the vector data to the CRS of the raster. 
+
+```{r warning=FALSE}
+sites <- sites_osm
+  
+# Buffer distances for which we are extracting using purrr
+sites_ndvi <- purrr::map_dfr(c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000), ~{
+  
+  st_buffer(sites, .x) %>%
+    
+    extract(ndvi, ., fun = mean, na.rm = TRUE) %>%
+    
+    bind_cols(sites, .) %>%
+    
+    mutate(buffer_dist = .x) %>%
+      
+    relocate(buffer_dist, .after = lat) %>%
+      
+    st_drop_geometry(.)
+  
+  }) %>%
+  
+  rename(ndvi = NDVI) %>%
+  
+  # Clean up
+  select(-any_of(c("ID", "id", "long", "lat", "easting_12n", "northing_12n", "start_date", 
+                   "end_date", "camera_failure_details", "deployment_id" )))
+#MODIStsp()
+```
+
+Save the file:
+
+```{r}
+write_csv(sites_ndvi, file="./data/output/OSM_MODISNDVI_site_covariates.csv")
+```
+
+
+

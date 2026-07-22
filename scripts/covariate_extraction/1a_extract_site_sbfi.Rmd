@@ -1,0 +1,405 @@
+---
+title: "Extract landcover covariates"
+author: "Aidan Brushett"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme: default
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=TRUE}
+# This is set to false just for quick knitting
+knitr::opts_chunk$set(echo = T,
+                      eval = T)
+```
+
+```{r}
+library(sf) # for points and buffering
+library(tidyverse)
+rm(list = ls())
+```
+
+# 1. Read in the raw site coordinates:
+
+I'll read in all the sites into a single file first: 
+
+```{r}
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
+  
+  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912)
+```
+
+We will also subset based on survey year, since 2021 and 2022 use separate human footprint databases from ABMI. 
+
+```{r}
+# Sampled 2023 onwards
+sites_osm_2023 <- sites_osm %>% 
+  
+  filter(str_detect(array_visit, "2023|2024|2025"))
+
+# Sampled 2022
+sites_osm_2022 <- sites_osm %>% 
+  
+  filter(str_detect(array_visit, "2022"))
+
+# Sampled 2021 
+sites_osm_2021 <- sites_osm %>% 
+  
+  filter(str_detect(array_visit, "2021"))
+```
+
+
+# 2. Forest inventory data
+
+## 2.1. Load, clip the forest inventory data
+
+We can do this for all sites at once (i.e. not split by survey year, since it's the same dataset for all arrays). First we'll buffer the camera sites so we can tell what 
+
+```{r}
+#For combining multiple sf objects into 1 (not needed currently other than for renaming to `sites`)
+sites <- bind_rows(sites_osm) #, sites_christina)
+
+# Check it out on a map
+plot(sites)
+
+# buffer the sites so that we can filter the landcover dataset and reduce file size
+# An 11km buffer will encompass all features for the buffer radii that we are extracting. 
+sites_buffered <- st_buffer(sites, dist = 11000) %>%
+  st_union()
+
+# check it out on a map
+plot(sites_buffered[1])
+```
+
+Now we can load in and clip the geodatabase containing the 2020 SBFI. This takes quite a while depending on file size. 
+
+```{r}
+# load landcover layer (will be slow)
+landcover_unclipped <- st_read("C:/databases/SBFI2020_Boreal_Plains.gdb", layer = "SBFI_2020_polygons")
+
+landcover <- landcover_unclipped %>%
+  # Reproject to UTM 11N, same as the sites
+  st_transform(., crs = 26912) %>%
+  # Clip to our camera buffers
+  filter(lengths(st_intersects(., sites_buffered)) > 0)
+
+#make sure it's all projected correctly 
+st_crs(landcover, describe = TRUE)
+st_crs(sites, describe = TRUE)
+plot(landcover[1])
+
+# clean up environment
+rm(landcover_unclipped, sites_buffered)
+gc()
+
+# double check that they are all format "sf" and "dataframe"
+str(sites)
+str(landcover)
+```
+
+## 2.2. Reshape data for key variables 
+
+First, tree species composition. This is a total pain because it's currently stored based on ranked columns rather than columns for each species name. We are going to take the value from each Species 1, Species *n* column, etc. and sum them together, then transform the data so we get a single percentage value for each polygon (row) for each tree species (column)
+
+
+Get a list of the tree species present in the dataset in vector format. 
+
+```{r}
+tree_spp <- landcover %>%
+  
+  # Faster run time
+  st_drop_geometry() %>%
+  
+  # These are the only ones we want
+  select(SPECIES_1,
+         SPECIES_2,
+         SPECIES_3,
+         SPECIES_4,
+         SPECIES_5) %>%
+  
+  unlist(.) %>%   # In a big ugly vector
+  
+  unique(.) %>% # What are the unique tree species present?
+
+  .[ . != " "] # Remove empty strings
+```
+
+Re-pivot the tree data for each polygon so that the species names are now the column names. This can take a while and is a bit clunky. 
+
+```{r}
+tree_percent <- landcover %>%
+  
+  st_drop_geometry() %>%
+  
+  # Select the species columns that have the name and % comp only
+  select(ID,
+         contains("SPECIES") & 
+           !contains("_CML"),
+         -SPECIES_NUMBER,
+         -SPECIES_CONIFEROUS_PERC
+         ) %>%
+  # Convert all columns to character
+  mutate(across(everything(), as.character)) %>%  
+  
+  # The start of some funky data reshaping
+  pivot_longer(cols = starts_with("SPECIES_"),
+               names_to = "temp",
+               values_to = "val") %>%
+  
+  # What rank is the species? We don't actually care but this helps keep things tidy/avoids duplicates when we pivot wider later
+  mutate(spp_rank = as.numeric(str_extract(temp, "\\d+"))) %>%
+
+  # Remove the numbers so that all the former rank columns are just called "species"
+  mutate(temp = str_replace_all(temp, "_\\d+", ""),
+         temp = str_replace_all(temp, "SPECIES_PERC", "PERCENTAGE")) %>%
+  
+  # Pivot wider so we now have a species column and a percent column
+  pivot_wider(names_from = temp, values_from = val) %>%
+  
+  # Only want the non-zero percents
+  filter(PERCENTAGE > 0) %>%
+
+  # Pivot wider again to get our species and comp values!!
+  pivot_wider(names_from = SPECIES, values_from = PERCENTAGE, values_fill = "") %>%
+  
+  select(-spp_rank) %>%
+  
+  # Convert back to numeric
+  mutate(across(everything(), as.numeric)) %>%
+  
+  # Replace NAs
+  mutate(across(everything(), ~ replace(., is.na(.), 0))) %>%
+  
+  # Group by polygon again
+  group_by(ID) %>%
+
+  # Take the sum of the % comp for all the species
+  summarize(across(everything(), sum))
+```
+
+Now we can repeat a similar process for timber harvest, extracted by year. 
+
+```{r}
+# Get harvest percent
+harvest_percent <- landcover %>% 
+  
+  # Runs faster without coordinates
+  st_drop_geometry(.) %>%
+  
+  # Year and amount columns, plus ID for pivoting/joining later
+  select(ID,
+         contains("DISTURB_HARVEST")) %>%
+  
+  # Reshape to a column for each year
+  pivot_wider(names_from = DISTURB_HARVEST_YEAR, 
+              values_from = DISTURB_HARVEST_PERC, 
+              values_fill = 0) %>%
+  
+  select(-`0`) %>%
+  
+  # clean up the names
+  rename_with(., ~paste0("HARVEST_PCT_", .), .cols = !contains("ID")) %>%
+  
+  # order by year
+  select(ID, sort(names(.)))
+```
+
+Now we can repeat a similar process for percent fire, extracted by year. 
+
+```{r}
+# Get fire percent
+fire_percent <- landcover %>% 
+  
+  st_drop_geometry(.) %>%
+  
+  # Year and proportion columns, plus ID for pivoting/joining later
+  select(ID,
+         DISTURB_FIRE_YEAR,
+         DISTURB_FIRE_PERC) %>%
+  
+  # Reshape to a column for each year
+  pivot_wider(names_from = DISTURB_FIRE_YEAR, 
+              values_from = DISTURB_FIRE_PERC, 
+              values_fill = 0) %>%
+  
+  select(-`0`) %>%
+
+  # clean up the names
+  rename_with(., ~paste0("FIRE_PCT_", .), .cols = !contains("ID")) %>%
+    
+  select(ID, sort(names(.)))
+```
+
+Intensity of fire for a given polygon. Same code as above just with a new variable of interest. 
+
+```{r}
+fire_intensity <- landcover %>% 
+  
+  st_drop_geometry(.) %>%
+  
+  select(ID,
+         DISTURB_FIRE_MAGNITUDE_AVG,
+         DISTURB_FIRE_YEAR) %>%
+  
+  pivot_wider(names_from = DISTURB_FIRE_YEAR, 
+              values_from = DISTURB_FIRE_MAGNITUDE_AVG, 
+              values_fill = 0) %>%
+  
+  select(-`0`) %>%
+  
+  rename_with(., ~paste0("FIRE_MAG_", .), .cols = !contains("ID")) %>%
+    
+  select(ID, sort(names(.)))
+```
+
+Left join all of the new covariates to the original spatial landcover data and replace NAs induced by joining rows that contained no fire/harvest.
+
+```{r}
+landcover_recalculated <- landcover %>%
+  
+  left_join(tree_percent, by = "ID") %>%
+  
+  left_join(fire_percent, by = "ID") %>%
+  
+  left_join(fire_intensity, by = "ID") %>%
+  
+  left_join(harvest_percent, by = "ID") %>%
+  
+  # Replace NAs
+  mutate(across(
+        .cols = c(all_of(tree_spp), contains("FIRE_PCT"), contains("HARVEST_PCT")), 
+        ~ replace(., is.na(.), 0))) %>%
+  
+  # Original tree species names were ugly, should fix later. 
+  rename_with(., ~paste0(., "_PCT_OF_TREED"), .cols = all_of(tree_spp))
+
+rm(tree_spp, tree_percent, fire_percent, fire_intensity, harvest_percent)
+```
+
+## 2.3. Identify variables to extract
+
+This is mostly to clean it up since this is a pretty unwieldly data frame. Helps for debugging to only see the things of interest :)
+
+```{r, message=FALSE, warning=FALSE}
+landcover_metrics <- landcover_recalculated %>% 
+  
+  # Select the metrics that you want to calculate
+  select(., 
+         
+         # Forest age
+         contains("AGE_"),
+         -AGE_AVG,
+         -AGE_MIN,
+         -AGE_MAX,
+         -AGE_MEDIAN,
+         -AGE_SD,
+         
+         # Landcover
+         contains("LC_"),
+         -LC_FAO_FOREST, 
+         -LC_TREED, 
+         -LC_WETLAND_VEGETATION,
+         
+         # Tree composition
+         contains("_PCT_OF_TREED"),
+         
+         # Fire and harvest percent
+         contains("FIRE_PCT"),
+         contains("HARVEST_PCT")
+         )
+```
+
+## 2.4. Extract data for the sites of interest
+
+This sums the % cover within each polygon and is weighted by their proportion of area within the buffer.
+
+-   e.g. a polygon takes up 0.50 of the buffer and was 50% conifer = 25% conifer total
+-   an additional polygon takes up 0.25 of the buffer and was 80% conifer = 20% conifer total
+-   the proportion cover for the total buffer around the site is 45% conifer. 
+-   *within a polygon the vegetation attributes are assumed to be constant*
+
+```{r, message=FALSE, warning=FALSE}
+sites_landcover_metrics <- list() # To store results
+
+# For progress bar
+start_time <- Sys.time()
+
+# A `for` loop is nicer for progress statements IMO vs. purrr...
+for(i in 1:nrow(sites)) {
+  
+  progress <- (i - 1) / nrow(sites)
+  
+  # Site we are extracting
+  site <- sites[i,]
+
+  # Progress bar
+  cat("\r Extracting site ", i, " of ", nrow(sites), " (", site$site, "): ", 
+      round(as.numeric(difftime(Sys.time(), start_time, units = "hours")) * (1 - progress) / progress, 2), 
+      " hours remaining        ", sep = "")
+  
+  # Store results in a list
+  sites_landcover_metrics[[i]] <- 
+    
+    # Buffer distances for which we are extracting using purrr
+    purrr::map_dfr(c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000), ~{
+      
+      # Clip the landcover to the site buffer               
+      st_intersection(landcover_metrics,
+                      st_buffer(site, .x)) %>%
+      
+      mutate(feature_area = st_area(.) %>% # Area of the feature within the buffer
+               as.numeric(.),
+             
+             # Total area sampled. For the LANDCOVER ONLY DATA, we will remove NA areas from our 'total' area calculation. 
+             # Obviously this doesn't make sense for HFI data.
+             total_area = sum(feature_area, na.rm = TRUE) %>% 
+               as.numeric(.),
+             
+             # Percent cover by a given feature
+             percent_area = feature_area / total_area,
+             
+             # Values for 'proportion cover' adjusted by the amount of buffer area (see above Rmd notes)
+             across(where(is.numeric) & !contains("_area"), ~ . / 100 * percent_area)) %>%
+    
+      # Runs faster without geometry
+      st_drop_geometry(.) %>%
+    
+      # Sum across all features
+      summarise(across(where(is.numeric) & !contains("_area"), sum, na.rm = TRUE)) %>%
+    
+      # Keep track of where the numbers came from!
+      mutate(buffer_dist = .x,
+             array = site$array,
+             array_visit = site$array_visit,
+             # site must come last. 
+             site = site$site) 
+    })
+  
+  # Clear some memory
+  rm(site)
+  gc()
+
+}
+
+# Save a backup in the same chunk
+save(sites_landcover_metrics, file = "./data/input/OSM_SBFI2020_site_covariates.RData")
+```
+
+## 2.5. Save results
+
+```{r, message=FALSE, warning=FALSE}
+sites_landcover_metrics_df <- bind_rows(sites_landcover_metrics) %>%
+
+  relocate(array, site, array_visit, buffer_dist) %>%
+  
+  select(-lat, -long)
+
+write_csv(sites_landcover_metrics_df, "./data/input/OSM_SBFI2020_site_covariates.csv")
+```
+
+
+***
+
+
