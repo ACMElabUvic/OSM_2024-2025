@@ -1,0 +1,184 @@
+---
+title: "Extract Climate"
+author: "Aidan Brushett"
+date: "2026-07-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. Load libraries
+
+```{r}
+rm(list=ls())
+library(daymetr)      #interface for daymet web services
+library(tidyverse)
+library(sf)
+```
+
+PLEASE READ ME!!!
+
+Before using R to extract the covariates, I selected the portion of the datasets around the sites using the "Select Features by Area" tool. I DO NOT RECOMMMEND CLIPPING the files as this caused loss of features. I did this in QGIS because R was very slow for processing the full layers, although possible if you have a more powerful computer. 
+
+The steps for this are (Follow steps 1 to 3 if subsetting the layer is required): 
+1. Use the "Select Features by Area" tool to select a portion of the layer and export as a new shapefile (see note about CRS below). Make 7 km buffers around the site to ensure you select a large enough portion of the layer (change this if your largest buffers will be larger than 5km.
+2. Manually look at the layers to make sure all features were selected (important for HFI). Zoom in and compare the subsetted and the original layers.
+3. Ensure that the camera sites align in the correct locations (I used lakes/towns to double-check and visually reference this, just to be sure CRS are all good).
+4. Reproject the layer to the appropriate UTM Zone. 
+5. Follow the below script in R with the subsetted/reprojected data.
+6. QAQC in QGIS or ArcGIS: compare the output dataframe and the original layer. I created a 250 m and 1000 m buffers and looked a multiple sites in detail to ensure each feature type was represented in the output .csv for those buffers. 
+
+
+!!! IMPORTANT NOTE !!! Check the validity of all layer CRS BEFORE extracting covariates in R. READ BELOW. 
+
+
+The ABMI layers are in NAD83 / Alberta 10-TM (Forest) when downloaded but extracting in UTM Zones is slightly more accurate due to the smaller area and the position of the central meridian. If sites are in western Alberta, UTM Zone 11 will need to be used (make sure to check a map of UTM Zones and choose the most suitable one). Once you select the area of interest, save the shape file as a new shape file with the UTM Zone CRS. 
+
+# 1. Read in the raw site coordinates:
+
+I'll read in all the sites into a single file first: 
+
+```{r}
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
+  
+  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912)
+
+fire <- st_read("C:/databases/Alberta Wildfire Perimeters 1931-2025/HistoricalWildfirePerimeters.shp") %>%
+  
+  st_transform(., crs=26912)
+```
+
+Clip the data:
+
+```{r}
+extent <- st_union(st_buffer(sites_osm, 11000))
+plot(extent)
+
+fire <- fire %>%
+  st_filter(extent, .predicate = st_intersects)  
+```
+
+Get ready for extraction, separate by burn code!
+
+```{r}
+burn_class <- unique(fire$BURN_CLASS)
+
+firex <- fire %>%
+  
+  select(FIRENUMBER, 
+         BURN_CLASS,
+         YEAR)
+```
+
+
+
+```{r, message=FALSE, warning=FALSE}
+sites <- sites_osm 
+
+sites_fire_metrics <- list() # To store results
+
+# For progress bar
+start_time <- Sys.time()
+
+# A `for` loop is nicer for progress statements IMO vs. purrr...
+for(i in 1:nrow(sites)) {
+  
+  progress <- (i - 1) / nrow(sites)
+  
+  # Site we are extracting
+  site <- sites[i,]
+
+  # Progress bar
+  cat("\r Extracting site ", i, " of ", nrow(sites), " (", site$site, "): ", 
+      round(as.numeric(difftime(Sys.time(), start_time, units = "hours")) * (1 - progress) / progress, 2), 
+      " hours remaining        ", sep = "")
+  
+  # Store results in a list
+  sites_fire_metrics[[i]] <- 
+    
+    # Buffer distances for which we are extracting using purrr
+    purrr::map_dfr(c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000), ~{
+      
+      site_buffer <- st_buffer(site, .x) # Create buffer around site
+
+      # Clip the landcover to the site buffer               
+      st_intersection(fire, site_buffer) %>% # Intersect with fire layer
+
+      mutate(feature_area = st_area(.) %>% # Area of the feature within the buffer
+               as.numeric(.),
+             
+             # Total area sampled. 
+             total_area = st_area(site_buffer) %>% 
+               as.numeric(.),
+             
+             # Percent cover by a given feature
+             percent_area = feature_area / total_area) %>%
+             
+      # Runs faster without geometry
+      st_drop_geometry(.) %>%
+    
+      # Differentiate harvested areas by year
+      mutate(FIRE_DATECLASS = paste0("FIRE_CLASS", BURN_CLASS, "_", YEAR)) %>%
+        
+      # Group by array/site/feature type to summarize percent cover
+      group_by(array, site, array_visit, lat, long, FIRE_DATECLASS) %>%
+        
+      summarize(PCT_COVER = sum(percent_area),
+                buffer_dist = .x) %>%
+        
+      # Pivot to wide format: one row per site-buffer combo, features as columns
+      pivot_wider(names_from = FIRE_DATECLASS,
+                  values_from = PCT_COVER,
+                  values_fill = 0)
+    })
+
+  
+  # Clear some memory
+  rm(site)
+  gc()
+
+}
+
+# Save a backup in the same chunk
+save(sites_fire_metrics, file = "./data/input/OSM_wildfire_site_covariates.RData")
+```
+
+Format results. First to dataframe, then tidy up some unwanted columns, then complete the rows for missing sites/buffers (i.e., no fire history!)
+
+```{r}
+sites_fire_metrics_df <- bind_rows(sites_fire_metrics) %>%
+
+  relocate(array, site, array_visit, buffer_dist, lat, long)
+
+
+# Many sites do not have any category of fire, so we need to account for the missing values here.
+# Many ways to do this (e.g., for HFI data this is done in the next script post-merge), but for now we'll just use expand_grid and a left_join
+sites_fire_metrics_df_full <- sites_osm %>%
+  
+  st_drop_geometry(.) %>%
+  
+  select(array, site, array_visit) %>%
+  
+  distinct() %>%
+  
+  expand_grid(buffer_dist = c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000)) %>%
+  
+  # Join on array, site, and buffer_dist. The helper columns will naturally carry over from the grid.
+  left_join(sites_fire_metrics_df, by = c("array", "site", "array_visit", "buffer_dist")) %>%
+  # I'd like these columns removed to keep things tidy in the next script. 
+  select(-any_of(c("long", "lat", "easting_12n", "northing_12n", "start_date", 
+                   "end_date", "camera_failure_details", "deployment_id" )))
+  
+  # Fill in the zeros from this join
+  mutate(across(starts_with("FIRE_CLASS"), ~replace_na(.x, 0)))
+
+```
+
+Save the file: 
+
+```{r}
+write_csv(sites_fire_metrics_df_full, "./data/output/OSM_wildfire_site_covariates.csv")
+```
+

@@ -83,6 +83,16 @@ This folder includes cleaned and reformatted data spanning all years of OSM moni
 
 -   [**OSM_timelapse_2021-2024.csv**]{style="color: #7B0F17;"}; contains cleaned and error-checked image data from program Timelapse for all species and LUs sampled 2021-2024 (not formatted into independent detections).
 
+-   [**OSM_HFI2021_site_covariates.csv**]{style="color: #7B0F17;"}, **OSM_HFI2022_site_covariates.csv**, **OSM_HFI2023_site_covariates.csv**; contain raw Human Footprint Inventory (HFI) proportional cover for each individual HFI feature class, extracted at multiple buffer distances around each site.
+
+-   [**OSM_SBFI2020_site_covariates.csv**]{style="color: #7B0F17;"}; contains raw Landcover, Species and Age Forest Inventory (SBFI) land cover, forest age, tree species composition, and historical fire/harvest proportional cover, etc. extracted at multiple buffer distances around each site.
+
+-   [**OSM_MODISNDVI_site_covariates.csv**]{style="color: #7B0F17;"}; contains raw MODIS NDVI (vegetation greenness index) values extracted at each site.
+
+-   **OSM_DAYMET_annual_site_covariates.csv**; contains extracted and processed DAYMET climate and weather covariates (e.g., temperature, snow water equivalent) for the sampling year and three years prior.
+
+-   **OSM_ABWILDFIRE_annual_site_covariates.csv**; contains extracted historical wildfire perimeter data from the Alberta Wildfire Perimeters (1931-2025) shapefile.
+
 */raw*\
 This folder includes raw data for the current year (2024-2025), and for previous years (2021-2023) carried forward for use in the merged processed files above.
 
@@ -90,10 +100,7 @@ This folder includes raw data for the current year (2024-2025), and for previous
 -   [**OSM_2024_timelapse_ddb_files.Rdata**]{style="color: #7B0F17;"}; contains a vector of all informative .ddb files in the ACME Netdrive (private) containing the raw image data from image tagging for 2024-2025. The source .ddb files are not publicly available.
 -   **OSM_deployment_2021.csv**, **OSM_deployment_2022.csv**, **OSM_deployment_2023.csv**, [**OSM_deployment_2024.csv**]{style="color: #7B0F17;"}; contain raw deployment start and end dates for all camera sites sampled in the respective year, including information about camera failures (early ends, datetime malfunctions).
 -   **OSM_Deployment_Site_Data_2021.csv**, **OSM_Deployment_Site_Data_2022.csv**, **OSM_Deployment_Site_Data_2023.csv**, [**OSM_Deployment_Site_Data_2024.csv**]{style="color: #7B0F17;"}; contain raw data pertaining to the location, gps coordinates, date, time, and description of the sites where cameras were deployed for the respective year.
--   [**OSM_HFI2021_site_covariates.csv**]{style="color: #7B0F17;"}, [**OSM_HFI2022_site_covariates.csv**]{style="color: #7B0F17;"}; contain raw Human Footprint Inventory (HFI) proportional cover for each individual HFI feature class, extracted at multiple buffer distances around each site.
--   [**OSM_SBFI2020_site_covariates.csv**]{style="color: #7B0F17;"}; contains raw Landcover, Species and Age Forest Inventory (SBFI) land cover, forest age, tree species composition, and historical fire/harvest proportional cover, etc. extracted at multiple buffer distances around each site.
--   [**OSM_MODISNDVI_site_covariates.csv**]{style="color: #7B0F17;"}; contains raw MODIS NDVI (vegetation greenness index) values extracted at each site.
--   **OSM_timelapse_2021.csv**, **OSM_timelapse_2022.csv**, **OSM_timelapse_2023.csv**, **OSM_timelapse_2024.csv**; contain raw image data from program Timelapse for all species and LUs sampled in the respective year (not formatted into independent detections).
+-   **OSM_timelapse_2021.csv**, **OSM_timelapse_2022.csv**, **OSM_timelapse_2023.csv**, **OSM_timelapse_2024.csv**; contain raw image data from program Timelapse for all species and LUs sampled in the respective year (not formatted into independent detections). Metadata for these files is described in the */processed* section for OSM_timelapse_2021-2024.csv.
 
 *Files in figures folder*
 
@@ -115,26 +122,19 @@ This sub-folder contains histograms of key landscape covariates (cumulative foot
 
 *Files in scripts folder*
 
-This folder contains the various scripts needed for data formatting, visualization, and analysis.
+This folder contains the various scripts needed for data formatting, visualization, and analysis. The raw data to re-run the covariate extraction scripts exceeds GitHub storage limits, but can be downloaded from their respective sources.
 
 -   [**00_quick_error_check_for_taggers.Rmd**]{style="color: #7B0F17;"}; .rmd file, a "quick-run" version of *0_ACME_clean_timelapse_script* meant for image taggers to quickly flag and correct errors as they tag, without knitting the full workbook.
 -   [**0_ACME_clean_timelapse_script_2026-02-09.Rmd**]{style="color: #7B0F17;"}; .rmd file and knitted .html file that will gather all of the individual imagery folders from the Netdrive, clean and append them, flag errors for manual correction, then export a clean dataset to this repository *and* a location on the Netdrive. Also cleans the deployment data from the Netdrive and exports noteworthy wildlife photos to the Netdrive.
 -   **1_process_detections_and_deployments.Rmd**; .rmd file and knitted .html file that imports and cleans camera deployment and site coordinate data across all years, calculates camera operability, and processes independent detections and the various monthly/weekly response variables used in models.
--   [**2a_extract_site_covariates.Rmd**]{style="color: #7B0F17;"}; .rmd file, extracts HFI and land cover covariates at multiple buffer distances around each site. *Superseded by the scripts in the `covariate_extraction` sub-folder, retained here for reference.*
--   [**2b_extract_site_ndvi.Rmd**]{style="color: #7B0F17;"}; .rmd file, extracts MODIS NDVI values at each site. *Superseded by the scripts in the `covariate_extraction` sub-folder, retained here for reference.*
--   **2c_format_group_site_covariates.Rmd**; .rmd file, formats and groups the raw HFI/land cover/NDVI covariates into the final covariate dataset. *Superseded by the scripts in the `covariate_extraction` sub-folder, retained here for reference.*
+-   **2a_extract_site_sbfi.Rmd**; extracts Species and Age Forest Inventory (SBFI) land cover, forest age, tree species, historical fire/harvest, etc. covariates at multiple buffer distances around each site.
+-   **2b_extract_site_ndvi.Rmd**; extracts MODIS NDVI values at each site.
+-   **2c_extract_site_daymet.Rmd**; batch-extracts daily surface weather and climate data (snow water equivalent, min/max temperature) from the DAYMET single-pixel extraction tool for each site and summarizes it into annual winter severity metrics.
+-   **2d_extract_site_wildfire.Rmd**; extracts historical wildfire perimeter data from the Alberta Wildfire Perimeters (1931-2025) shapefile at multiple buffer distances around each site.
+-   **2e_extract_site_hfi.Rmd**; extracts ABMI Human Footprint Inventory (HFI) covariates at multiple buffer distances around each site.
+-   **2f_format_group_site_covariates.Rmd**; cleans, groups (following ABMI convention), and merges all of the above covariate sources (HFI, SBFI, NDVI, Daymet climate, wildfire) into the final *OSM_site_covariates_2021-2024.csv* file.
 -   **3_create_FYE_figures.Rmd**; .rmd file and knitted .html file that creates summary plots of camera operability, total independent detections, and naive occupancy of all boreal species, organized by array. Used for the Fiscal Year End OSM report.
 -   **4_leaflet_map.Rmd**; .rmd file, creates the interactive leaflet map (*OSM_data_exploration_map*) used to explore site locations and covariates.
-
-*/covariate_extraction*\
-This sub-folder contains the current covariate extraction and formatting pipeline, which replaces scripts *2a-2c* above and was used to generate the current *OSM_site_covariates_2021-2024.csv*. The raw data to re-run these scripts exceeds GitHub storage limits but can be downloaded from their respective sources.
-
--   [**1a_extract_site_sbfi.Rmd**]{style="color: #7B0F17;"}; extracts Species and Age Forest Inventory (SBFI) land cover, forest age, tree species, historical fire/harvest, etc. covariates at multiple buffer distances around each site.
--   [**1b_extract_site_ndvi.Rmd**]{style="color: #7B0F17;"}; extracts MODIS NDVI values at each site.
--   [**1c_extract_site_daymet.Rmd**]{style="color: #7B0F17;"}; batch-extracts daily surface weather and climate data (snow water equivalent, min/max temperature) from the DAYMET single-pixel extraction tool for each site and summarizes it into annual winter severity metrics.
--   [**1d_extract_site_wildfire.Rmd**]{style="color: #7B0F17;"}; extracts historical wildfire perimeter data from the Alberta Wildfire Perimeters (1931-2025) shapefile at multiple buffer distances around each site.
--   [**1e_extract_site_hfi.Rmd**]{style="color: #7B0F17;"}; extracts ABMI Human Footprint Inventory (HFI) covariates at multiple buffer distances around each site.
--   [**2_format_group_site_covariates.Rmd**]{style="color: #7B0F17;"}; cleans, groups (following ABMI convention), and merges all of the above covariate sources (HFI, SBFI, NDVI, Daymet climate, wildfire) into the final *OSM_site_covariates_2021-2024.csv* file.
 
 *Files in LU2_LU3_request_for_Jake folder*
 
@@ -227,12 +227,14 @@ This folder contains a one-off deliverable summarizing repeat-sampled arrays LU2
 
 -   [**Photos taken**]{style="color: #2274A5;"}, numeric count of photos recorded on the camera at time of retrieval. New for 2024-2025.
 
-### DATA-SPECIFIC INFORMATION FOR: [[OSM_HFI2021_site_covariates.csv]{style="color: #7B0F17;"}] and [[OSM_HFI2022_site_covariates.csv]{style="color: #7B0F17;"}]
+## PROCESSED DATA
+
+### DATA-SPECIFIC INFORMATION FOR: [[OSM_HFI2021_site_covariates.csv]{style="color: #7B0F17;"}] and [[OSM_HFI2022_site_covariates.csv]{style="color: #7B0F17;"}] and [[OSM_HFI2023_site_covariates.csv]{style="color: #7B0F17;"}]
 
 *Information on exact methods for data extraction and more specific variable descriptions can be found on the [ABMI human footprints wall to wall data download website](https://abmi.ca/home/data-analytics/da-top/da-product-overview/Human-Footprint-Products/HF-inventory.html)* **OR** *in the relevant_literature folder of the previous year's repository (HFI_2021_v1_0_Metadata_Final.pdf)*.
 
--   **Number of variables/columns:** 120 / 159
--   **Number of observations/rows:** 2054 / 13624 (one row per site x buffer distance)
+-   **Number of variables/columns:** 120 / 129 / 153
+-   **Number of observations/rows:** 2051 / 4031 / 9595 (one row per site x buffer distance)
 
 **Variable List:**
 
@@ -261,24 +263,46 @@ This folder contains a one-off deliverable summarizing repeat-sampled arrays LU2
 
 ### DATA-SPECIFIC INFORMATION FOR: [[OSM_MODISNDVI_site_covariates.csv]{style="color: #7B0F17;"}]
 
--   **Number of variables/columns:** 10
+-   **Number of variables/columns:** 5
 -   **Number of observations/rows:** 15678
 
 **Variable List:**
 
--   [**array**]{style="color: #2274A5;"}, [**site**]{style="color: #2274A5;"}, factors identifying the landscape unit and camera site.
--   [**long**]{style="color: #2274A5;"}, [**lat**]{style="color: #2274A5;"}, numeric geographic coordinates for the camera location.
+-   [**array**]{style="color: #2274A5;"}, [**site**]{style="color: #2274A5;"}, [**array_visit**]{style="color: #2274A5;"}, factors identifying the landscape unit, camera site, and array-visit (e.g. `LU2_2021`).
 -   [**buffer_dist**]{style="color: #2274A5;"}, numeric buffer radius (m) the NDVI value was extracted over.
--   [**start_date**]{style="color: #2274A5;"}, [**end_date**]{style="color: #2274A5;"}, dates the camera was active.
--   [**camera_failure_details**]{style="color: #2274A5;"}, character describing any camera issues.
--   [**deployment_id**]{style="color: #2274A5;"}, factor identifying the deployment bout.
 -   [**ndvi**]{style="color: #2274A5;"}, numeric MODIS Normalized Difference Vegetation Index value (vegetation greenness/productivity) at the site.
 
-## PROCESSED DATA
+### DATA-SPECIFIC INFORMATION FOR: [[OSM_DAYMET_annual_site_covariates.csv]{style="color: #7B0F17;"}]
+
+-   **Number of variables/columns:** 39
+-   **Number of observations/rows:** 603
+
+**Variable List:**
+
+-   [**array**]{style="color: #2274A5;"}, [**site**]{style="color: #2274A5;"}, [**array_visit**]{style="color: #2274A5;"}, factors identifying the landscape unit, camera site, and array-visit (e.g. `LU2_2021`).
+-   **Winter climate metrics** (suffixed `_year_n`, `_year_n-1`, `_year_n-2`, `_year_n-3`, referring to the sample year and each of the three preceding years), derived from DAYMET daily surface weather data over the core winter period:
+    -   [**first_snow_day**]{style="color: #2274A5;"}, [**last_snow_day**]{style="color: #2274A5;"}, day of year of the first/last day with measurable snow water equivalent.
+    -   [**mean_swe**]{style="color: #2274A5;"}, [**peak_swe**]{style="color: #2274A5;"}, mean and maximum snow water equivalent (kg/m2) recorded over winter.
+    -   [**snow_cover_days**]{style="color: #2274A5;"}, count of days with measurable snow water equivalent.
+    -   [**mean_winter_temp**]{style="color: #2274A5;"}, mean of the daily average (max + min / 2) temperature (°C) over winter.
+    -   [**extreme_cold_days**]{style="color: #2274A5;"}, count of days with a minimum temperature below -20°C.
+    -   [**cold_degree_days**]{style="color: #2274A5;"}, cumulative sum of minimum temperatures below 0°C (severity of cold exposure).
+    -   [**freeze_thaw_events**]{style="color: #2274A5;"}, count of days with a max temp above 0°C and min temp below 0°C while snow was present.
+
+### DATA-SPECIFIC INFORMATION FOR: [[OSM_ABWILDFIRE_annual_site_covariates.csv]{style="color: #7B0F17;"}]
+
+-   **Number of variables/columns:** 105
+-   **Number of observations/rows:** 15678
+
+**Variable List:**
+
+-   [**array**]{style="color: #2274A5;"}, [**site**]{style="color: #2274A5;"}, [**array_visit**]{style="color: #2274A5;"}, factors identifying the landscape unit, camera site, and array-visit (e.g. `LU2_2021`).
+-   [**buffer_dist**]{style="color: #2274A5;"}, numeric buffer radius (m) the NDVI value was extracted over.
+-   **Fire perimeter metrics**, numeric, as a percent of burned area within the buffer. All columns follow the convention: `FIRE_CLASS#_YEAR`, where \# refers to the burn class (1-5, or 9 for unknown) and YEAR refers to the year of the fire ranging from 1931 to 2025.
 
 ### DATA-SPECIFIC INFORMATION FOR: [[OSM_site_covariates_2021-2024.csv]{style="color: #7B0F17;"}]
 
-This csv contains the combined and grouped landscape, climate, and vegetation covariates from *OSM_HFI2021/2022_site_covariates.csv*, *OSM_SBFI2020_site_covariates.csv*, *OSM_MODISNDVI_site_covariates.csv*, and the DAYMET climate and Alberta wildfire perimeter extractions, produced by the scripts in *scripts/covariate_extraction*. HFI features were grouped following the standards established by ABMI to simplify the number of potential variables and ensure enough data to use them in a modeling framework.
+This csv contains the combined and grouped landscape, climate, and vegetation covariates from *OSM_HFI2021/2022/2023_site_covariates.csv*, *OSM_SBFI2020_site_covariates.csv*, *OSM_MODISNDVI_site_covariates.csv*, *OSM_DAYMET_annual_site_covariates.csv,* and *OSM_ABWILDFIRE_site_covariates.csv*. HFI features were grouped following the standards established by ABMI to simplify the number of potential variables and ensure enough data to use them in a modeling framework, and climate/fire/harvest variables have been standardized based on survey year.
 
 -   **Number of variables/columns:** 100
 -   **Number of observations/rows:** 15678 (one row per site x array_visit x buffer distance)

@@ -26,29 +26,29 @@ rm(list = ls())
 I'll read in all the sites into a single file first: 
 
 ```{r}
-sites_osm <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv") %>%
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
   
-  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912) %>%
-  
-  mutate(year = year(start_date))
+  st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912)
 ```
 
-We will also subset based on survey year, since 2021 and 2022 use separate human footprint databases from ABMI. This splits all of them by year of deployment date!
+We will also subset based on survey year, since 2021 and 2022 use separate human footprint databases from ABMI. 
 
 ```{r}
-# Sampled 2022 onwards
-sites_osm_2022_2023_2024 <- sites_osm %>% 
+# Sampled 2023 onwards
+sites_osm_2023 <- sites_osm %>% 
   
-  filter(year >= 2022)
+  filter(str_detect(array_visit, "2023|2024|2025"))
 
+# Sampled 2022
+sites_osm_2022 <- sites_osm %>% 
+  
+  filter(str_detect(array_visit, "2022"))
 
 # Sampled 2021 
 sites_osm_2021 <- sites_osm %>% 
   
-  filter(year == 2021)
-
+  filter(str_detect(array_visit, "2021"))
 ```
-
 
 
 # 2. Forest inventory data
@@ -73,11 +73,11 @@ sites_buffered <- st_buffer(sites, dist = 11000) %>%
 plot(sites_buffered[1])
 ```
 
-Now we can load in and clip the geodatabase containing the 2020 SBFI. This takes quite a while depending on file size. This is NOT in the Github, but can be stored on individual users' computers from the public download based on the costs. 
+Now we can load in and clip the geodatabase containing the 2020 SBFI. This takes quite a while depending on file size. 
 
 ```{r}
 # load landcover layer (will be slow)
-landcover_unclipped <- st_read("C:/Users/aidanbrushett/Desktop/projects/OSM_covariate_extraction/SBFI2020_boreal_plains.gdb", layer = "SBFI_2020_polygons")
+landcover_unclipped <- st_read("C:/databases/SBFI2020_Boreal_Plains.gdb", layer = "SBFI_2020_polygons")
 
 landcover <- landcover_unclipped %>%
   # Reproject to UTM 11N, same as the sites
@@ -343,7 +343,7 @@ for(i in 1:nrow(sites)) {
   sites_landcover_metrics[[i]] <- 
     
     # Buffer distances for which we are extracting using purrr
-    purrr::map_dfr(c(50, 100, 200, 300, 400, seq(250, 5000, 250), 10000), ~
+    purrr::map_dfr(c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000), ~{
       
       # Clip the landcover to the site buffer               
       st_intersection(landcover_metrics,
@@ -372,9 +372,10 @@ for(i in 1:nrow(sites)) {
       # Keep track of where the numbers came from!
       mutate(buffer_dist = .x,
              array = site$array,
-             site = site$site)
-      
-    )
+             array_visit = site$array_visit,
+             # site must come last. 
+             site = site$site) 
+    })
   
   # Clear some memory
   rm(site)
@@ -383,326 +384,22 @@ for(i in 1:nrow(sites)) {
 }
 
 # Save a backup in the same chunk
-#save(sites_landcover_metrics, file = "./data/raw/OSM_SBFI2020_site_covariates.RData")
+save(sites_landcover_metrics, file = "./data/input/OSM_SBFI2020_site_covariates.RData")
 ```
 
 ## 2.5. Save results
 
-We'll save to the "./data/raw" folder even though this is technically a 'processed' output, since it will undergo lots more formatting later. 
-
 ```{r, message=FALSE, warning=FALSE}
 sites_landcover_metrics_df <- bind_rows(sites_landcover_metrics) %>%
 
-  relocate(array, site, buffer_dist)
+  relocate(array, site, array_visit, buffer_dist) %>%
+  
+  select(-lat, -long)
 
-write_csv(sites_landcover_metrics_df, "./data/raw/OSM_SBFI2020_site_covariates.csv")
+write_csv(sites_landcover_metrics_df, "./data/input/OSM_SBFI2020_site_covariates.csv")
 ```
 
 
 ***
 
 
-
-
-
-
-# 3. Human footprint data 2021 -- for OSM sites in 2021 ONLY
-
-Future years are extracted using the 2022 HFI for now. 
-
-## 3.1. Import data
-
-```{r}
-# Camera locations (point)
-sites <- bind_rows(sites_osm_2021)
-
-# buffer sites so that we can filter the landcover data and reduce file size
-sites_buffered <- st_buffer(sites, dist = 11000) %>%
-  
-  st_union()
-
-plot(sites_buffered[1])
-
-# Human footprint index:
-# load human features layer (will be slow)
-#st_layers("./maps/HFI2021_clipped.gdb")
-
-hfi <- st_read("C:/Users/aidanbrushett/Desktop/projects/OSM_covariate_extraction/HFI2021_boreal_plains/HFI_2021_clipped.shp") %>%
-  
-  st_transform(., crs = 26912)
-
-
-#make sure it's all projected correctly 
-st_crs(hfi, describe = TRUE)
-st_crs(sites, describe = TRUE)
-#plot(hfi[1])
-
-# clean up
-rm(sites_buffered)
-gc()
-
-# double check that they are all format "sf" and "dataframe"
-str(sites)
-str(hfi)
-```
-
-## 3.2. Extract variables
-
-```{r message=FALSE, warning=FALSE}
-# Extract HFI (Human Footprint Inventory) covariates using site buffers
-hfi_metrics <- hfi %>%
-  select(OBJECTID, FEATURE_TY, YEAR) # Keep only relevant columns
-
-sites_hfi_metrics <- list() # List to store output
-
-start_time <- Sys.time() # Start timing the process
-
-# Loop over each site in the 'sites' object
-for(i in 1:nrow(sites)) {
-  
-  progress <- (i - 1) / nrow(sites) # Track progress
-  
-  site <- sites[i, ] # Extract the current site
-  
-  # Print progress to console with estimated time remaining
-  cat("\r Extracting site ", i, " of ", nrow(sites), " (", site$site, "): ", 
-      round(as.numeric(difftime(Sys.time(), start_time, units = "hours")) * (1 - progress) / progress, 2), 
-      " hours remaining        ", sep = "")
-  
-  # Extract metrics for the current site across buffer distances
-  sites_hfi_metrics[[i]] <-
-    
-    purrr::map_dfr(c(50, 100, 200, 300, 400, seq(250, 5000, 250), 10000), ~{
-      
-      site_buffer <- st_buffer(site, .x) # Create buffer around site
-      
-      st_intersection(hfi_metrics, site_buffer) %>% # Intersect with HFI layer
-        
-        # Calculate areas and percent cover
-        mutate(feature_area = st_area(.) %>%
-                 as.numeric(.), # Area of each intersected HFI polygon
-               
-               total_area = st_area(site_buffer) %>%
-                 as.numeric(.), # Total area of buffer (unlike landcover, we use full area)
-               
-               percent_area = feature_area / total_area) %>% # Proportion of buffer occupied
-        
-        st_drop_geometry(.) %>% # Drop geometry for efficiency
-        
-        # Differentiate harvested areas by year
-        mutate(FEATURE_TY = ifelse(str_detect(FEATURE_TY, "HARVEST-AREA"),
-                                   paste0(FEATURE_TY, "-", YEAR),
-                                   FEATURE_TY)) %>%
-        
-        # Group by array/site/feature type to summarize percent cover
-        group_by(array, site, FEATURE_TY) %>%
-        
-        summarize(PCT_COVER = sum(percent_area),
-                  buffer_dist = .x) %>%
-        
-        # Pivot to wide format: one row per site-buffer combo, features as columns
-        pivot_wider(names_from = FEATURE_TY,
-                    values_from = PCT_COVER,
-                    values_fill = 0)
-    })
-  
-  # Clean up memory after each iteration
-  rm(site)
-  gc()
-}
-
-#save(sites_hfi_metrics, file = "./data/output/OSM_HFI2021_site_covariates.RData")
-```
-
-
-## 3.3. Save results
-
-We'll save to the "./data/raw" folder even though this is technically a 'processed' output, since it will undergo lots more formatting later. 
-
-```{r message=FALSE}
-# Some extra tidying. We need to deal with missing buffers/sites when there were no human features. 
-sites_hfi_metrics_df <- bind_rows(sites_hfi_metrics) %>%
-  
-  ungroup() %>%
-
-  relocate(array, site, buffer_dist, sort(names(.))) %>%
-  
-  select(-array) %>%
-  
-  complete(site, buffer_dist) %>%
-  
-  # Create some extra columns
-  separate_wider_delim(site,
-                       delim = '_',
-                       names = c('array', 'camera'),
-                       cols_remove = FALSE) %>%
-  
-  select(-camera) %>%
-  
-  # Replace NAs introduced by "complete"
-  mutate(across(4:last_col(), ~replace(., is.na(.), 0)))
-
-write_csv(sites_hfi_metrics_df, "./data/raw/OSM_HFI2021_site_covariates.csv")
-```
-
-***
-
-
-
-
-
-# 4. Human footprint data 2022 -- for OSM sites in 2022 ONWARDS
-
-Previous years are extracted using the 2021 HFI for now. 
-
-## 4.1. Import data
-
-```{r}
-# Camera locations (point)
-sites <- sites_osm_2022_2023_2024
-# buffer sites so that we can filter the landcover data and reduce file size
-sites_buffered <- st_buffer(sites, dist = 11000) %>%
-  
-  st_union()
-
-plot(sites_buffered[1])
-
-# Human footprint index:
-# load human features layer (will be slow)
-#st_layers("./maps/HFI2021_clipped.gdb")
-
-hfi <- st_read("C:/Users/aidanbrushett/Desktop/projects/OSM_covariate_extraction/HFI2022_boreal_plains/HFI_2022_clipped.shp") %>%
-  
-  st_transform(., crs = 26912)
-
-
-#make sure it's all projected correctly 
-st_crs(hfi, describe = TRUE)
-st_crs(sites, describe = TRUE)
-#plot(hfi[1])
-
-# clean up
-rm(sites_buffered)
-gc()
-
-# double check that they are all format "sf" and "dataframe"
-str(sites)
-str(hfi)
-```
-Align the timber harvest names so that they correspond to the harvest names in the 2021 HFI. I don't know why they changed this...
-
-```{r}
-sort(unique(hfi$FEATURE_TY))
-
-hfi <- hfi %>%
-  
-  mutate(FEATURE_TY = case_when(
-    FEATURE_TY == "TIMBER-HARVEST-GREEN-AREA" ~ "HARVEST-AREA",
-    FEATURE_TY == "TIMBER-HARVEST-WHITE-AREA" ~ "HARVEST-AREA-WHITE-ZONE",
-    TRUE ~ FEATURE_TY))
-
-sort(unique(hfi$FEATURE_TY))
-
-```
-
-
-## 4.2. Extract variables
-
-```{r message=FALSE, warning=FALSE}
-# Extract HFI (Human Footprint Inventory) covariates using site buffers
-hfi_metrics <- hfi %>%
-  select(OBJECTID, FEATURE_TY, YEAR) # Keep only relevant columns
-
-sites_hfi_metrics <- list() # List to store output
-
-start_time <- Sys.time() # Start timing the process
-
-# Loop over each site in the 'sites' object
-for(i in 1:nrow(sites)) {
-  
-  progress <- (i - 1) / nrow(sites) # Track progress
-  
-  site <- sites[i, ] # Extract the current site
-  
-  # Print progress to console with estimated time remaining
-  cat("\r Extracting site ", i, " of ", nrow(sites), " (", site$site, "): ", 
-      round(as.numeric(difftime(Sys.time(), start_time, units = "hours")) * (1 - progress) / progress, 2), 
-      " hours remaining        ", sep = "")
-  
-  # Extract metrics for the current site across buffer distances
-  sites_hfi_metrics[[i]] <-
-    
-    purrr::map_dfr(c(50, 100, 200, 300, 400, seq(250, 5000, 250), 10000), ~{
-      
-      site_buffer <- st_buffer(site, .x) # Create buffer around site
-      
-      st_intersection(hfi_metrics, site_buffer) %>% # Intersect with HFI layer
-        
-        # Calculate areas and percent cover
-        mutate(feature_area = st_area(.) %>%
-                 as.numeric(.), # Area of each intersected HFI polygon
-               
-               total_area = st_area(site_buffer) %>%
-                 as.numeric(.), # Total area of buffer (unlike landcover, we use full area)
-               
-               percent_area = feature_area / total_area) %>% # Proportion of buffer occupied
-        
-        st_drop_geometry(.) %>% # Drop geometry for efficiency
-        
-        # Differentiate harvested areas by year
-        mutate(FEATURE_TY = ifelse(str_detect(FEATURE_TY, "HARVEST-AREA"),
-                                   paste0(FEATURE_TY, "-", YEAR),
-                                   FEATURE_TY)) %>%
-        
-        # Group by array/site/feature type to summarize percent cover
-        group_by(array, site, FEATURE_TY) %>%
-        
-        summarize(PCT_COVER = sum(percent_area),
-                  buffer_dist = .x) %>%
-        
-        # Pivot to wide format: one row per site-buffer combo, features as columns
-        pivot_wider(names_from = FEATURE_TY,
-                    values_from = PCT_COVER,
-                    values_fill = 0)
-    })
-  
-  # Clean up memory after each iteration
-  rm(site)
-  gc()
-}
-
-#save(sites_hfi_metrics, file = "./data/output/OSM_HFI2022_site_covariates.RData")
-```
-
-
-## 4.3. Save results
-
-We'll save to the "./data/raw" folder even though this is technically a 'processed' output, since it will undergo lots more formatting later. 
-
-```{r message=FALSE}
-# Some extra tidying. We need to deal with missing buffers/sites when there were no human features. 
-sites_hfi_metrics_df <- bind_rows(sites_hfi_metrics) %>%
-  
-  ungroup() %>%
-
-  relocate(array, site, buffer_dist, sort(names(.))) %>%
-  
-  select(-array) %>%
-  
-  complete(site, buffer_dist) %>%
-  
-  # Split only at the first underscore
-  extract(site, into = c("array", "camera"), 
-          regex = "^([^_]+)_(.*)$",
-          remove = F) %>%
-  
-  select(-camera) %>%
-  
-  # Replace NAs introduced by "complete"
-  mutate(across(4:last_col(), ~replace(., is.na(.), 0))) 
-
-
-write_csv(sites_hfi_metrics_df, "./data/raw/OSM_HFI2022_site_covariates.csv")
-```
-
-***

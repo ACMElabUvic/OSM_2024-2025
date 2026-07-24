@@ -28,9 +28,25 @@ rm(list = ls())
 We want these separated so I won't bind them with purrr just yet. Clunky but versatile. 
 
 ```{r}
-sites_osm <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv") %>%
+sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
   
   st_as_sf(., coords = c("easting_12n", "northing_12n"), crs = 26912)
+
+
+# Sampled 2022 onwards
+#sites_osm_2022 <- sites_osm %>% 
+#  
+#  filter(array %in% c("LU13", "LU15", "LU21", "LU1",
+#                      "LU9", "LU16", "LU14", "LU22"))
+#
+# Sampled 2021 
+#sites_osm_2021 <- sites_osm %>% 
+#  
+#  filter(array %in% c("LU2", "LU3"))
+
+
+
+
 
 
 # buffer sites so that we can filter the landcover data and reduce file size
@@ -43,7 +59,7 @@ st_bbox(st_transform(sites_osm_buffered, crs = 4326))
 
 plot(sites_osm_buffered)
 
-#st_write(sites_osm_buffered, "./data/input/modis_sites.shp", append = FALSE)
+st_write(sites_osm_buffered, "./data/input/modis_sites.shp", append = FALSE)
 
 ```
 
@@ -100,11 +116,12 @@ Export.image.toDrive({
 });
 ```
 
-Let's read in the raster that came from that script. It's also stored somewhere on the netdrive but not a bad idea to think about re-extracting later anyway. 
+Let's read in the raster that came from that script:
 
 ```{r}
 # Modis stores integers that need to be re-scaled for the actual NDVI values
-ndvi_raw <- rast("C:/Users/aidanbrushett/Desktop/projects/OSM_covariate_extraction/data_2025-07-01/input/NDVI_Mean_2020_2024.tif") * 0.0001
+
+ndvi_raw <- rast("data/input/NDVI_Mean_2020_2024.tif") * 0.0001
 
 plot(ndvi_raw)
 ```
@@ -125,7 +142,7 @@ Currently set to suppress warnings about transforming the vector data to the CRS
 sites <- sites_osm
   
 # Buffer distances for which we are extracting using purrr
-sites_ndvi <- purrr::map_dfr(c(50, 100, 200, 300, 400, seq(250, 5000, 250), 10000), ~{
+sites_ndvi <- purrr::map_dfr(c(50, 100, 200, 250, 300, 400, seq(500, 5000, by = 250), 10000), ~{
   
   st_buffer(sites, .x) %>%
     
@@ -143,14 +160,16 @@ sites_ndvi <- purrr::map_dfr(c(50, 100, 200, 300, 400, seq(250, 5000, 250), 1000
   
   rename(ndvi = NDVI) %>%
   
-  select(-ID)
+  # Clean up
+  select(-any_of(c("ID", "id", "long", "lat", "easting_12n", "northing_12n", "start_date", 
+                   "end_date", "camera_failure_details", "deployment_id" )))
 #MODIStsp()
 ```
 
 Save the file:
 
 ```{r}
-write_csv(sites_ndvi, file="./data/raw/OSM_MODISNDVI_site_covariates.csv")
+write_csv(sites_ndvi, file="./data/output/OSM_MODISNDVI_site_covariates.csv")
 ```
 
 

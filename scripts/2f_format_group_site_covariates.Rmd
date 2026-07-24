@@ -37,29 +37,41 @@ rm(list=ls())
 
 # 1. Import all covariate data
 
+FOR 2026/27: THE ARRAY_VISIT COLUMN HAS BEEN ADDED IN THE EXTRACTION SCRIPTS TO ACCOUNT FOR REPEAT SAMPLES/MULTIPLE YEARS WITH THE SAME SITE. 
+Fixes to this script must include:
+- joining the data based on the `array_visit` column (I did it manually for 2025/26 but this is the last time that will work). 
+- accounting for missing values/rows in the HFI. This is hard to do now in Script 1x. because of the `array_visit` column. This could all be accomplished by merging to the SBFI, which should include all sites and all buffers (no missing valueS) 
+  - I think the two chunks below already handle this, just need to confirm
+
 ```{r message=FALSE}
-# Old code to fix everything
-#bind_rows(read_csv("./data/output/OSM_SBFI2020_site_covariates.csv"),
-#          read_csv("./data/output/OSM_SBFI2020_site_covariates10000.csv")) %>%
+hfi <- bind_rows(read_csv("./data/output/OSM_HFI2021_site_covariates.csv"),
+                 read_csv("./data/output/OSM_HFI2022_site_covariates.csv"),
+                 read_csv("./data/output/OSM_HFI2023_site_covariates.csv"))
+
+sbfi <- read_csv("./data/output/OSM_SBFI2020_site_covariates.csv")
+
+fire <- read_csv("./data/output/OSM_ABWILDFIRE_site_covariates.csv")
+
+daymet <- read_csv("./data/output/OSM_DAYMET_annual_site_covariates.csv")
+
+ndvi <- read_csv("./data/output/OSM_MODISNDVI_site_covariates.csv")
+```
+
+
+!!!! TEMPORARY FIX (WON'T BE NEEDED THE NEXT TIME THE SCRIPT IS RUN)
+```{r message=FALSE}
+#!!!! TEMPORARY FIX (WON'T BE NEEDED THE NEXT TIME THE SCRIPT IS RUN)
+#sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv") %>%
 #  
-#  write_csv(., file = "./data/output/OSM_SBFI2020_site_covariates.csv")
+#  select(array, site, array_visit)#
+#
+#
+#sbfi <- left_join(sbfi, sites_osm, by = c("array", "site")) %>%
+#  
+#  relocate(array, site, array_visit)
 
-
-hfi <- bind_rows(read_csv("./data/raw/OSM_HFI2021_site_covariates.csv"),
-                 read_csv("./data/raw/OSM_HFI2022_site_covariates.csv"))
-
-sbfi <- bind_rows(read_csv("./data/raw/OSM_SBFI2020_site_covariates.csv")) %>%
-  
-  select(-lat, -long)
-
-setdiff(sbfi$site, hfi$site)
-
-# Read in the site/year combos. 
-osm_site_year <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv") %>%
-  
-  mutate(array_year = year(start_date)) %>%
-  
-  select(site, array_year)
+# OVERWRITE
+#write_csv(sbfi, "./data/output/OSM_SBFI2020_site_covariates.csv")
 ```
 
 Some 'control' sites didn't extract in the HFI because they have exactly 0 disturbance. Crazy! Let's manually add them here using the SBFI as a reference.
@@ -68,15 +80,15 @@ Some 'control' sites didn't extract in the HFI because they have exactly 0 distu
 hfi <- hfi %>%
   
   complete(site = sbfi$site, buffer_dist) %>%
-  # Remove array
-  select(-array) %>%
-  # Add the correct array from the SBFI data (fixes NAs for the new sites)
-  left_join(distinct(sbfi[1:2]), by = "site") %>%
+  # Remove array and array_visit, they'll be re-joined from the SBFI dataset
+  select(-any_of(c("array", "array_visit"))) %>%
+  # Add the correct array and array_visit from the SBFI data (fixes NAs for the new sites)
+  left_join(distinct(sbfi[1:3]), by = "site") %>%
   # Put array as first column
-  relocate(array) %>%
+  relocate(array, site, array_visit) %>%
 
   # Fill in the NA covariates that should be 0s. 
-  mutate(across(4:last_col(), ~replace_na(., 0))) %>%
+  mutate(across(5:last_col(), ~replace_na(., 0))) %>%
   
   # Manual fix since this column was weirdly a duplicate.
   # Combine the two columns and remove the one with hyphens.
@@ -95,8 +107,6 @@ hfi <- hfi %>%
 
 ## 2.1. Initial cleaning, add the sample year column
 
-This is a bit janky because of the repeat samples... will want to find a better solution next year. 
-
 ```{r}
 hfi <- hfi %>%
   
@@ -108,14 +118,8 @@ hfi <- hfi %>%
             ) %>%
 
   # What year were the arrays sampled? Used to determine recent fire and burns.
-  # Currently, left joined from the deployment data frame
-  left_join(osm_site_year, by = "site") #%>%
-  
-  # Old code from merging the ancestral arrays
-  #mutate(array_year = case_when(
-  #    array %in% c("WF1", "WF2", "RC") ~ 2018,
-  #    array %in% c("CL") ~ 2011)
-  #  )
+  mutate(array_year = as.numeric(str_extract(array_visit, "\\d+$"))) %>%
+  relocate(array_year, .after=array_visit)
 ```
 
 ```{r}
@@ -283,7 +287,7 @@ hfi_grouped <- hfi %>%
   select(order(colnames(.))) %>% 
   
   # move the columns that aren't HFI features or landcover to the front
-  relocate(array, site, buffer_dist, array_year) %>% 
+  relocate(array, site, buffer_dist, array_year, array_visit) %>% 
   
   # reorder variables so the veg data is after all the HFI data
   relocate(starts_with('lc_class'), .after = wells_active)
@@ -371,7 +375,7 @@ hfi_harvest <- purrr::map_dfr(unique(hfi$array_year), ~{
     ) %>%
     
   # move the columns that aren't HFI features or landcover to the front
-  select(array, site, buffer_dist, array_year, 
+  select(array, site, buffer_dist, array_year, array_visit,
          harvest_0_15, 
          harvest_gt_15,
          
@@ -393,7 +397,7 @@ hfi_harvest <- purrr::map_dfr(unique(hfi$array_year), ~{
 ```{r}
 hfi_final <- hfi_grouped %>% 
   
-  left_join(hfi_harvest, by = c("array", "site", "buffer_dist", "array_year")) %>%
+  left_join(hfi_harvest, by = c("array", "site", "array_visit", "buffer_dist", "array_year")) %>%
 
   mutate(
     # create column osm_industrial following Marissa's convention
@@ -431,7 +435,7 @@ hfi_final <- hfi_grouped %>%
         # Cumulative site disturbance with harvest
     cfi_with_harvest = 
       cfi_with_vegedges + 
-      harvest_0_15,
+      harvest_0_10,
 
     ) %>%
   
@@ -454,7 +458,7 @@ hfi_final <- hfi_grouped %>%
     'woody_vegetation_removal'
   ))) %>%
   
-  relocate(array, site, buffer_dist, array_year, sort(names(.)))
+  relocate(array, site, buffer_dist, array_year, array_visit, sort(names(.)))
 
 names(hfi_final)
 ```
@@ -475,15 +479,9 @@ sbfi <- sbfi %>%
                               replacement = '_')
             ) %>%
 
-  # What year were the arrays sampled? Used to determine recent fire and burns.
-  # Currently, left joined from the deployment data frame
-  left_join(osm_site_year, by = "site") %>%
-  
-  # Old code from merging the ancestral arrays
-  #mutate(array_year = case_when(
-  #    array %in% c("WF1", "WF2", "RC") ~ 2018,
-  #    array %in% c("CL") ~ 2011)
-  #  )
+  # What year were the arrays sampled? Used to determine recent fire.
+  mutate(array_year = as.numeric(str_extract(array_visit, "\\d+$"))) %>%
+  relocate(array_year, .after = array_visit) %>%
   
   mutate(
     # fire
@@ -498,7 +496,7 @@ names(sbfi)
 
 ```{r}
 # Now compute row-wise fire_0_15 and fire_gt_15
-# Loop through the sample years. This is the most efficient code I could find. 
+# Loop through the sample years. This is the most efficient code I could think of.  
 sbfi_fire <- purrr::map_dfr(unique(sbfi$array_year), ~{
   
   # Columns to sum (based on fire year and sample year)
@@ -556,8 +554,8 @@ sbfi_fire <- purrr::map_dfr(unique(sbfi$array_year), ~{
       
     ) %>%
     
-  # move the columns that aren't HFI features or landcover to the front
-  select(array, site, buffer_dist, array_year, 
+  # move the columns that aren't SBFI features or landcover to the front
+  select(array, site, buffer_dist, array_year, array_visit,
          fire_0_15, 
          fire_gt_15,
          fire_0_10,
@@ -589,9 +587,9 @@ sbfi_final <- sbfi %>%
          fire_total) %>%
   
   # Join the fire data
-  left_join(sbfi_fire, by = c("array", "site", "buffer_dist", "array_year")) %>%
+  left_join(sbfi_fire, by = c("array", "site", "buffer_dist", "array_year", "array_visit")) %>%
 
-  relocate(array, site, buffer_dist, array_year, sort(names(.))) %>%
+  relocate(array, site, buffer_dist, array_year, array_visit, sort(names(.))) %>%
   
   # Nicer species column names
   rename_with(
@@ -603,90 +601,228 @@ names(sbfi_final)
 ```
 
 
+# 4. Format the fire covs from Alberta wildfire service
+
+## 4.1. Initial cleaning, add the sample year column
+
+```{r}
+fire <- fire %>%
+  
+  set_names(tolower(names(.)) %>%
+              str_replace_all(., pattern = c('-'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_') %>%  # what you want the pattern to be replaced with
+              str_replace_all(., pattern = c('\\.'), # provide the character pattern to look for (if you don't keep the \\ it won't work)
+                              replacement = '_')
+            ) %>%
+
+  # What year were the arrays sampled? Used to determine recent fire and burns.
+  mutate(array_year = as.numeric(str_extract(array_visit, "\\d+$"))) %>%
+  relocate(array_year, .after=array_visit)
+```
+
+```{r}
+names(fire)
+```
+
+## 4.2. Calculate fire by year columns for each burn class
+
+This is quite clunky, but basically for each row (with a respective sample year), it identifies which columns are within the time range (using some character parsing). Since we have so many burn codes
+```{r}
+# Now compute row-wise fire_0_15 and fire_gt_15
+# Loop through the sample years FOR EACH BURN CODE. This is the most efficient code I could think of.  
+burn_class_strings <- c("fire_class1_",
+                       "fire_class2_",
+                       "fire_class3_",
+                       "fire_class4_",
+                       "fire_class5_",
+                       "fire_class9_"
+                       )
+
+# Loop through burn classes
+fire_binned <- purrr::map(burn_class_strings, function(burn_class) {
+  
+  # Loop through the array years
+  purrr::map_dfr(unique(fire$array_year), function(year) {
+    
+    # Columns to sum (based on fire year and sample year)
+    cols_0_15 <- paste0(burn_class, seq(year - 14, year))
+    cols_gt_15 <- paste0(burn_class, seq(1900, year - 15))
+    
+    # By decade
+    cols_0_10 <- paste0(burn_class, seq(year - 9, year))
+    cols_10_20 <- paste0(burn_class, seq(year - 19, year - 10))
+    cols_20_30 <- paste0(burn_class, seq(year - 29, year - 20))
+    cols_30_40 <- paste0(burn_class, seq(year - 39, year - 30))
+    cols_gt_40 <- paste0(burn_class, seq(1900, year - 40))
+    
+    # Establishment and aggrandization stages:
+    cols_10_25 <- paste0(burn_class, seq(year - 24, year - 10))
+    cols_gt_25 <- paste0(burn_class, seq(1900, year - 25))
+    
+    # Total fire across all possible years!
+    cols_total <- paste0(burn_class, seq(1900, 2030))
+  
+  
+    fire %>%
+      filter(array_year == year) %>%
+      
+      mutate(
+        
+        # Use glue syntax "{burn_class}" and the walrus operator :=
+        "{burn_class}0_15" := rowSums(across(any_of(cols_0_15))),
+        "{burn_class}gt_15" := rowSums(across(any_of(cols_gt_15))),
+        
+        "{burn_class}gt_25" := rowSums(across(any_of(cols_gt_25))),
+        "{burn_class}10_25" := rowSums(across(any_of(cols_10_25))),
+        
+        "{burn_class}0_10" := rowSums(across(any_of(cols_0_10))),
+        "{burn_class}10_20" := rowSums(across(any_of(cols_10_20))),
+        "{burn_class}20_30" := rowSums(across(any_of(cols_20_30))),
+        "{burn_class}30_40" := rowSums(across(any_of(cols_30_40))),
+        "{burn_class}gt_40" := rowSums(across(any_of(cols_gt_40))),
+        
+        "{burn_class}total" := rowSums(across(any_of(cols_total))),
+
+        
+      ) %>%
+      
+    # Drop the original single-year columns
+    select(-any_of(c(outer(burn_class_strings, 1900:2030, paste0)))) %>%
+    
+    # move the columns that aren't SBFI features or landcover to the front
+    relocate(array, site, buffer_dist, array_year, array_visit)
+      
+    # Close year loop
+    })
+  
+  # Close burn class loop
+  }) %>% 
+  
+  # Name the resulting list elements based on the burn classes
+  purrr::set_names(burn_class_strings) %>%
+  
+  # Apply left_join across the whole list. We could use cbind but then the ID columns would be duplicated. 
+  reduce(left_join, by = c("array", "site", "buffer_dist", "array_year", "array_visit")) 
+
+str(fire_binned)
+```
+
+
+## 4.3. Finish formatting the fire data
+
+Let's sum across all burn codes for the time bins. 
+This is probably what we'll use for modelling anyway due to data density.
+Clunky BUT IT WORKS AND IT'S VERY EASY TO READ. 
+
+```{r}
+bins <- c("0_15", "gt_15", "0_10", "10_25", "gt_25", "10_20", "20_30", "30_40", "gt_40", "total")
+
+fire_final <- fire_binned %>%
+  
+  mutate(
+    # 0 to 15 years
+    fire_0_15 = rowSums(across(contains("_0_15")), na.rm = TRUE),
+    
+    # Greater than 15 years
+    fire_gt_15 = rowSums(across(contains("_gt_15")), na.rm = TRUE),
+    
+    # 0 to 10 years
+    fire_0_10 = rowSums(across(contains("_0_10")), na.rm = TRUE),
+    
+    # 10 to 25 years
+    fire_10_25 = rowSums(across(contains("_10_25")), na.rm = TRUE),
+    
+    #Greater than 25 years
+    fire_gt_25 = rowSums(across(contains("_gt_25")), na.rm = TRUE),
+    
+    # 10 to 20 years
+    fire_10_20 = rowSums(across(contains("_10_20")), na.rm = TRUE),
+    
+    # 20 to 30 years
+    fire_20_30 = rowSums(across(contains("_20_30")), na.rm = TRUE),
+    
+    # 30 to 40 years
+    fire_30_40 = rowSums(across(contains("_30_40")), na.rm = TRUE),
+    
+    # Greater than 40 years
+    fire_gt_40 = rowSums(across(contains("_gt_40")), na.rm = TRUE),
+    
+    # Total fire footprint across all classes
+    fire_total = rowSums(across(contains("_total")), na.rm = TRUE)
+  )
+
+```
+
 
 # 5. Put it all together:
 
 ## 5.1. Import lat/long and UTM 12N coordinates
 
 ```{r}
-# Clean up this similar, old file
-rm(osm_site_year)
-
 # read in the 'site coordinate' files. Purrr works for now. 
-coords <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv")
+coords <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv")
 ``` 
 
-## 5.2. Append everything and final inspection
+## 5.2. Remove some columns for now...
+
+First SBFI fire. We don't want these for now, since we have better fire polygons from AB wildfire now!!
+
+```{r}
+names(sbfi_final)
+
+# Remove all fire cols
+sbfi_final <- sbfi_final %>%
+  
+  select(-contains("fire"))
+
+names(sbfi_final)
+```
+
+Second let's remove the burn_class columns until we have a specific question that will use them, just to keep the dataframe more readable. 
+
+```{r}
+names(fire_final)
+
+# Remove all fire cols
+fire_final <- fire_final %>%
+  
+  select(-contains("fire_class"))
+
+names(fire_final)
+```
+
+## 5.3. Append everything and final inspection
 
 ```{r}
 # Tidy up and final check
-covs <- hfi_final %>%
+covs <- sbfi_final %>%
   
-  left_join(sbfi_final, by = c("array", "site", "buffer_dist", "array_year")) %>%
+  left_join(hfi_final, by = c("array", "site", "buffer_dist", "array_visit", "array_year")) %>%
+  
+  left_join(fire_final, by = c("array", "site", "buffer_dist", "array_visit", "array_year")) %>%
+  
+  left_join(ndvi, by = c("array", "site", "buffer_dist", "array_visit")) %>%
+  
+  left_join(daymet, by = c("array", "site", "array_visit")) %>%
 
-  left_join(coords, by = c('array', 'site')) %>%
+  left_join(coords, by = c("array", "site", "array_visit")) %>%
   
-  relocate(array, site, array_year, start_date, end_date, lat, long, easting_12n, northing_12n, buffer_dist) %>%
-  
-  # Remove some columns. Should have been done in an earlier step but just noticed it now...
-  select(-camera_failure_details, -deployment_id)
+  relocate(array, site, array_year, array_visit, lat, long, easting_12n, northing_12n, start_date, end_date, camera_failure_details, deployment_id, buffer_dist)
 
 summary(covs)
 head(covs)
+names(covs)
+
+# This should be an even 26 (or whatever number of buffers you've extracted)
+nrow(covs) / nrow(coords)
 ```
-
-Also append the NDVI:
-
-A few of these fields are in NDVI and not the others... they are nice to have though so I'll add them in just for posterity (or remove them at the end of the chunk):
-```{r}
-ndvi <- read_csv("./data/raw/OSM_MODISNDVI_site_covariates.csv") %>%
-  
-  select(-deployment_id, -start_date, -end_date)
-
-covs <- covs %>%
-  
-  left_join(ndvi, by = c("site", "array", "buffer_dist", "lat", "long")) %>%
-  
-  # Remove some columns. Should have been done in an earlier step but just noticed it now...
-  select(-camera_failure_details)
-```
-
 
 ## 5.4. Save the data:
 
 ```{r}
-write_csv(covs, "./data/processed/OSM_site_covariates_2021-2025.csv")
+write_csv(covs, "./data/output/OSM_site_covariates_2021-2024.csv")
 ```
 
-
-Export to a shapefile for data requests:
-
-```{r}
-covs <- read_csv("./data/processed/OSM_site_covariates_2021-2025.csv")
-
-
-# Convert to sf using existing UTM coordinates
-covs_sf <- covs %>%
-  filter(buffer_dist == 250) %>%
-  st_as_sf(
-    coords = c("easting_12n", "northing_12n"),
-    crs = 26912,
-    remove = FALSE     # keep original cols
-  )
-
-# Quick check
-plot(covs_sf[,1])
-
-# Export to ESRI Shapefile
-st_write(
-  covs_sf,
-  "C:/OSM_ACMELab_CameraStations_2021_2025",
-  driver = "ESRI Shapefile",
-  delete_layer = TRUE
-)
-
-write_csv(covs_sf, "./OSM_ACMELab_CameraStations_2021_2025.csv")
-```
 
 
 End script
