@@ -10,14 +10,6 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r}
-library(sf) # for points and buffering
-library(tidyverse)
-library(terra)
-#library(MODIStsp)
-rm(list = ls())
-```
-
 The purpose of this script is to batch extract daily surface weather and climate data from DAYMET's single pixel extraction tool. To do this I will use our file of camera locations (lat/long), and extract data for every study year for each site. I could go through and only extract the relevant years for each site, since all sites were not sampled across the entire study period, but I think its easier just to extract it all and then filter down later.
 
 The Daymet single pixel extractor tool takes the camera lat and long coordinates into the projected daymet x/y coordinates.  From the Daymet dataset of daily interpolated surface weather variables, daily data from the nearest 1 km x 1 km Daymet grid cell are extracted and formatted as a table with one column for each Daymet variable and one row for each day
@@ -62,8 +54,8 @@ I am going to extract data for years 2019-2024 (7 years). For this to work, you 
 ```{r}
 batch_data <- download_daymet_batch(
   file_location = "./data/input/OSM_site_coordinates_2021-2024_DAYMET.csv",
-  start = 2019, #example start year in 2020
-  end = 2024,   #example end year in 2024
+  start = 2015, #example start year in 2020
+  end = 2025,   #example end year in 2024
   internal = TRUE)
 
 sites_daymet <- map(batch_data, "data") %>%
@@ -98,9 +90,9 @@ Save the file:
 write_csv(sites_daymet, "./data/output/OSM_DAYMET_daily_site_covariates.csv")
 ```
 
-
-
-
+```{r}
+sites_daymet <- read_csv("./data/output/OSM_DAYMET_daily_site_covariates.csv")
+```
 
 # 3. Let's format into some useful annual winter metrics. 
 
@@ -113,7 +105,7 @@ winter_end <- 120 # APRIL 30
 sites_daymet_annual <- sites_daymet %>%
   
   # Create a column to track which winter it is, based on the START of winter. 
-  # This is a bit incorrect but it follows convention for tracking OSM sampling fiscal years, which go by start date
+  # This is a bit unconventional but it follows convention for tracking OSM sampling fiscal years, which go by start date
   mutate(winter_year = if_else(day < winter_start, year - 1, year)) %>%
   
   filter(day >= winter_start | day <= winter_end) %>%
@@ -124,6 +116,8 @@ sites_daymet_annual <- sites_daymet %>%
   # Group by site and the new winter year
   group_by(across(array:array_visit), winter_year) %>% 
   
+  mutate(new_snow_water_equiv_kgM2 = snow_water_equiv_kgM2 - lag(snow_water_equiv_kgM2)) %>%
+
   summarize(
     # -- TIMING --
     # which() ensures we safely ignore NA values while finding the index
@@ -137,8 +131,20 @@ sites_daymet_annual <- sites_daymet %>%
     
     # -- TEMPERATURE --
     mean_winter_temp    = mean((max_temp_C + min_temp_C) / 2, na.rm = TRUE),
+    max_winter_temp     = max(max_temp_C, na.rm = TRUE),
+    min_winter_temp     = min(min_temp_C, na.rm = TRUE),
     extreme_cold_days   = sum(min_temp_C < -20, na.rm = TRUE), # Adjust biological threshold as needed
     cold_degree_days    = sum(abs(min_temp_C[min_temp_C < 0]), na.rm = TRUE),
+    
+    # -- PRECIP -- 
+    mean_precip         = mean(precip_mm, na.rm = TRUE),
+    max_precip          = max(precip_mm, na.rm = TRUE),
+    min_precip          = min(precip_mm, na.rm = TRUE),
+    total_precip        = sum(precip_mm, na.rm = TRUE),
+    cumulative_swe      = sum(pmax(new_snow_water_equiv_kgM2, 0), na.rm = TRUE),
+    
+    # -- Mean vapor pressure 
+    mean_vapor_pressire = mean(water_vapor_pressure_pa, na.rm = TRUE),
     
     # -- SNOW CONDITION --
     freeze_thaw_events  = sum(max_temp_C > 0 & min_temp_C < 0 & snow_water_equiv_kgM2 > 0, na.rm = TRUE),
@@ -151,10 +157,10 @@ Excellent. Now let's tidy up a bit, and also standardize the winter year values 
 We'll also delete some unwanted metadata columns to keep it clean in the next script. 
 
 ```{r}
-sites_daymet_annual <- sites_daymet_annual %>%
+sites_daymet_per_year <- sites_daymet_annual %>%
   
-  # Drop the partially-present 2018 winter. We don't want this. 
-  filter(winter_year != 2018) %>%
+  # Drop the partially-present 2014 winter. We don't want this. 
+  filter(winter_year != 2014) %>%
   
   mutate(
     # Helper column to track deployment year
@@ -163,8 +169,8 @@ sites_daymet_annual <- sites_daymet_annual %>%
     year_n = winter_year - survey_year
   ) %>%
   
-  # PRevious/current 4 years of winter data for each site. 
-  filter(year_n %in% c(-3, -2, -1, 0)) %>%
+  # PRevious/current for five years of winter data for each site. 
+  filter(year_n %in% c(-5, -4, -3, -2, -1, 0)) %>%
   
   # Make an indicator to append to the columns
   mutate(year_n = ifelse(year_n==0, 
@@ -185,9 +191,53 @@ sites_daymet_annual <- sites_daymet_annual %>%
 
 ```
 
+
+Let's also take a 5-year mean! 
+
+```{r}
+sites_daymet_avg5yr <- sites_daymet_annual %>%
+  
+  # Drop the partially-present 2014 winter. We don't want this. 
+  filter(winter_year != 2014) %>%
+  
+  mutate(
+    # Helper column to track deployment year
+    survey_year = year(start_date),
+    # Which winter relative to the year we sampled?
+    year_n = winter_year - survey_year
+  ) %>%
+  
+  relocate(survey_year, year_n, .before = snow_cover_days) %>%
+  
+  # PRevious/current 4 years of winter data for each site. 
+  filter(year_n %in% c(-4, -3, -2, -1, 0)) %>%
+  
+  group_by(array, site, array_visit) %>%  # adjust grouping variables as needed (e.g., c(array, site, deployment_id))
+  
+  summarise(
+    across(snow_cover_days:last_col(), 
+           ~ mean(.x, na.rm = TRUE),
+           .names = "{.col}_avg5yr"),
+    .groups = "drop"
+  )
+
+names(sites_daymet_avg5yr)
+```
+
+And join them back:
+
+```{r}
+sites_daymet_annual_final <- sites_daymet_avg5yr %>%
+  
+  left_join(sites_daymet_per_year, 
+            by = c("site", "array", "array_visit"))
+```
+
 Save the file. 
 
 ```{r}
-write_csv(sites_daymet_annual, "./data/output/OSM_DAYMET_annual_site_covariates.csv")
+write_csv(sites_daymet_annual_final, "./data/output/OSM_DAYMET_annual_site_covariates.csv")
 ```
+
+
 
