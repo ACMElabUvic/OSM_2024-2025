@@ -274,13 +274,13 @@ This folder contains a one-off deliverable summarizing repeat-sampled arrays LU2
 
 ### DATA-SPECIFIC INFORMATION FOR: [[OSM_DAYMET_annual_site_covariates.csv]]
 
--   **Number of variables/columns:** 39
+-   **Number of variables/columns:** 120
 -   **Number of observations/rows:** 603
 
 **Variable List:**
 
 -   **array**, **site**, **array_visit**, factors identifying the landscape unit, camera site, and array-visit (e.g. `LU2_2021`).
--   **Winter climate metrics** (suffixed `_year_n`, `_year_n-1`, `_year_n-2`, `_year_n-3`, referring to the sample year and each of the three preceding years), derived from DAYMET daily surface weather data over the core winter period:
+-   **Winter climate metrics** (suffixed `_year_n`, `_year_n-1`, `_year_n-2`, `_year_n-3`, `_year_n-4`, `_year_n-5`, and `_avg5yr`, referring to the sample year and each of the five preceding years, as well as a 5-year average of the current year and the **four** preceding years), derived from DAYMET daily surface weather data over the core winter period:
     -   **first_snow_day**, **last_snow_day**, day of year of the first/last day with measurable snow water equivalent.
     -   **mean_swe**, **peak_swe**, mean and maximum snow water equivalent (kg/m2) recorded over winter.
     -   **snow_cover_days**, count of days with measurable snow water equivalent.
