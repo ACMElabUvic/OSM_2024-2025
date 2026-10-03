@@ -1,0 +1,247 @@
+
+library(sf) # for points and buffering
+library(leaflet)
+library(shiny)
+library(tidyverse)
+library(plotly)
+rm(list = ls())
+
+# 1. Read in the raw site coordinates:
+
+covs <- read_csv("./data/input/OSM_site_covariates_2021-2024.csv")
+
+dets <- read_csv("./data/input/OSM_response_total_detections_per_effort_2021-2024.csv") %>%
+  
+  group_by(array, site, array_visit) %>%
+  
+  select(-presence) %>%
+  
+  pivot_wider(names_from = species, 
+              values_from = detections) %>%
+  
+  ungroup()
+
+# Now let's left join the data:
+  
+data <- dets %>%
+  
+  left_join(covs, by = c("array", "site", "array_visit")) %>%
+  
+  relocate(array, array_visit, site, array_year, start_date, end_date, lat, long, easting_12n, northing_12n, camera_failure_details, deployment_id, buffer_dist)
+
+
+# Shiny app:
+
+# Identify covariate/species columns by removing known metadata columns
+metadata_cols <- c("array", "array_visit", "site", "array_year", "start_date", 
+                   "end_date", "lat", "long", "easting_12n", "northing_12n",
+                   "camera_failure_details", "deployment_id",
+                   "buffer_dist", "camera_days")
+layer_choices <- setdiff(names(data), metadata_cols)
+
+
+# Define the UI
+ui <- fluidPage(
+  titlePanel("OSM Data Exploration"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("buffer_filter", 
+                  "Select Buffer Distance (m):", 
+                  choices = sort(unique(data$buffer_dist)),
+                  selected = 500),
+      
+      conditionalPanel(
+        condition = "input.tabs == 'Map Viewer'",
+        # Two layer selectors
+        selectInput("layer1_var", "Select Layer 1:", 
+                    choices = layer_choices, selected = "white-tailed deer"),
+        selectInput("layer2_var", "Select Layer 2:", 
+                    choices = layer_choices, selected = "coyote"),
+        
+        hr(),
+        
+        # Pearson's R output
+        uiOutput("correlation_text"),
+        
+        # Side-by-side histograms
+        plotOutput("layer_hists", height = "180px"),
+        
+        hr(),
+        
+        h4("Site Metadata"),
+        uiOutput("point_metadata")
+      ),
+      
+      conditionalPanel(
+        condition = "input.tabs == 'Correlation Matrix'",
+        helpText("This tab displays a Pearson's correlation matrix (r) for all numeric columns at the chosen buffer distance.")
+      )
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        id = "tabs", 
+        tabPanel("Map Viewer", leafletOutput("map", height = "800px")),
+        tabPanel("Correlation Matrix", 
+                 h3("Pearson's Correlation Matrix (r)"),
+                 plotlyOutput("corr_heatmap", height = "750px"))
+      )
+    )
+  )
+)
+
+# Define the Server
+server <- function(input, output, session) {
+  
+  filtered_data <- reactive({
+    req(input$buffer_filter)
+    data %>% filter(buffer_dist == as.numeric(input$buffer_filter))
+  })
+  
+  # ==================== MAP TAB LOGIC ====================
+  
+  output$map <- renderLeaflet({
+    leaflet() %>%
+      addProviderTiles(providers$Esri.WorldTopoMap, group = "Topo") %>%
+      addProviderTiles(providers$Esri.WorldImagery, group = "Satellite") %>%
+      setView(lng = -112.0, lat = 56.0, zoom = 6) %>%
+      addScaleBar(position = "topleft")
+  })
+  
+  observe({
+    req(filtered_data(), input$layer1_var, input$layer2_var)
+    
+    current_data <- filtered_data()
+    
+    # Layer 1 Data & Palette
+    val1 <- current_data[[input$layer1_var]]
+    val1[is.na(val1)] <- 0
+    pal1 <- colorNumeric("viridis", domain = val1)
+    
+    # Layer 2 Data & Palette (Using 'magma' to visually distinguish from Layer 1)
+    val2 <- current_data[[input$layer2_var]]
+    val2[is.na(val2)] <- 0
+    pal2 <- colorNumeric("magma", domain = val2)
+    
+    # Dynamic group names for the layer toggle control
+    group1 <- input$layer1_var
+    group2 <- input$layer2_var
+    
+    leafletProxy("map", data = current_data) %>%
+      clearMarkers() %>%
+      clearControls() %>% 
+      
+      # Add Layer 1 Markers
+      addCircleMarkers(
+        lng = ~long, lat = ~lat,  
+        layerId = ~paste0(site, "_L1"), # Unique ID for clicking
+        radius = 6, fillColor = ~pal1(val1), fillOpacity = 0.8, color = "#333333", weight = 1,
+        group = group1,
+        popup = ~paste0("<b>", input$layer1_var, ":</b> ", round(val1, 4))
+      ) %>%
+      
+      # Add Layer 2 Markers
+      addCircleMarkers(
+        lng = ~long, lat = ~lat,  
+        layerId = ~paste0(site, "_L2"), 
+        radius = 6, fillColor = ~pal2(val2), fillOpacity = 0.8, color = "#333333", weight = 1,
+        group = group2,
+        popup = ~paste0("<b>", input$layer2_var, ":</b> ", round(val2, 4))
+      ) %>%
+      
+      # Legends placed on opposite sides to prevent overlapping
+      addLegend(position = "bottomright", pal = pal1, values = val1, title = group1, opacity = 1) %>%
+      addLegend(position = "bottomright", pal = pal2, values = val2, title = group2, opacity = 1) %>%
+      
+      # Add toggle controls for Basemaps and Overlay Groups
+      addLayersControl(
+        baseGroups = c("Topo", "Satellite"),
+        overlayGroups = c(group1, group2),
+        options = layersControlOptions(collapsed = FALSE)
+      ) %>%
+      
+      # Hide Layer 2 by default so points don't visually clash on load
+      hideGroup(group2)
+  })
+  
+  # Side-by-side Histograms
+  output$layer_hists <- renderPlot({
+    req(filtered_data(), input$layer1_var, input$layer2_var)
+    
+    val1 <- filtered_data()[[input$layer1_var]]
+    val2 <- filtered_data()[[input$layer2_var]]
+    
+    # Set plot parameters to draw 1 row, 2 columns
+    par(mfrow = c(1, 2), mar = c(4, 4, 2, 1)) 
+    
+    hist(val1, main = input$layer1_var, xlab = "", col = "#21918c", border = "white", breaks = 15)
+    hist(val2, main = input$layer2_var, xlab = "", col = "#fc8961", border = "white", breaks = 15)
+  })
+  
+  # Calculate and display Pearson's R
+  output$correlation_text <- renderUI({
+    req(filtered_data(), input$layer1_var, input$layer2_var)
+    
+    val1 <- filtered_data()[[input$layer1_var]]
+    val2 <- filtered_data()[[input$layer2_var]]
+    
+    # Calculate r, ignoring NAs
+    r_val <- cor(val1, val2, use = "pairwise.complete.obs", method = "pearson")
+    
+    tags$div(
+      style = "padding: 10px; background-color: #f5f5f5; border-radius: 5px; margin-bottom: 15px; text-align: center;",
+      tags$strong("Pearson's Correlation (r): "),
+      tags$span(style = "font-size: 16px; color: #d73027; font-weight: bold;", round(r_val, 3))
+    )
+  })
+  
+  # Format clicked point metadata
+  output$point_metadata <- renderUI({
+    click <- input$map_marker_click
+    if (is.null(click)) return(helpText("Click on a point to view its metadata."))
+    
+    current_data <- filtered_data()
+    
+    # Strip the "_L1" or "_L2" suffix to match the raw site name
+    clean_site_id <- gsub("_L[12]$", "", click$id)
+    clicked_row <- current_data %>% filter(site == clean_site_id)
+    
+    if (nrow(clicked_row) == 0) return(NULL)
+    
+    meta_info <- lapply(metadata_cols, function(col_name) {
+      tags$p(tags$strong(paste0(col_name, ": ")), as.character(clicked_row[[col_name]]), style = "margin: 0px; font-size: 12px;")
+    })
+    do.call(tagList, meta_info)
+  })
+  
+  # ==================== MATRIX TAB LOGIC ====================
+  
+  output$corr_heatmap <- renderPlotly({
+    req(filtered_data())
+    numeric_df <- filtered_data() %>% select(any_of(layer_choices)) %>% select(where(is.numeric))
+    corr_matrix <- cor(numeric_df, use = "pairwise.complete.obs", method = "pearson")
+    corr_melted <- as.data.frame(as.table(corr_matrix))
+    names(corr_melted) <- c("Var1", "Var2", "value")
+    
+    gg_heatmap <- ggplot(corr_melted, aes(Var1, Var2, fill = value)) +
+      geom_tile(color = "white") +
+      # Use a diverging color scheme suited for r values (-1 to 1)
+      scale_fill_gradient2(low = "#4575b4", mid = "#ffffbf", high = "#d73027", 
+                           midpoint = 0, limit = c(-1, 1), space = "Lab", 
+                           name = "Pearson\nCorrelation") +
+      theme_minimal() + 
+      theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+            axis.title = element_blank()) +
+      coord_fixed()
+    
+    # 5. Wrap in ggplotly to make it completely interactive
+    ggplotly(gg_heatmap)
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
+
+
+
