@@ -34,7 +34,7 @@ library(sf)
 I'll read in all the sites into a single file first: 
 
 ```{r}
-sites_osm <- read_csv("./data/input/OSM_site_coordinates_2021-2024.csv")
+sites_osm <- read_csv("./data/processed/OSM_site_coordinates_2021-2024.csv")
 ```
 
 For DAYMET to work, you must have a .csv file (not an R dataframe or tibble) with the columns `site`, `lat`, `long` IN THAT ORDER formatted to *WGS84 decimal degrees*. We'll write that here. 
@@ -44,7 +44,7 @@ sites_osm %>%
   
   relocate(site, lat, long, .before = everything()) %>%
   
-  write_csv(., "./data/input/OSM_site_coordinates_2021-2024_DAYMET.csv")
+  write_csv(., "./data/raw/OSM_site_coordinates_2021-2024_DAYMET.csv")
 ```
 
 # 2. Batch extracting the daymet data
@@ -53,7 +53,7 @@ I am going to extract data for years 2019-2024 (7 years). For this to work, you 
 
 ```{r}
 batch_data <- download_daymet_batch(
-  file_location = "./data/input/OSM_site_coordinates_2021-2024_DAYMET.csv",
+  file_location = "./data/raw/OSM_site_coordinates_2021-2024_DAYMET.csv",
   start = 2015, #example start year in 2020
   end = 2025,   #example end year in 2024
   internal = TRUE)
@@ -83,15 +83,31 @@ sites_daymet %>%
   filter(if_any(day_length_seconds:day, is.na))
 ```
 
+```{r}
+daily_climate %>%
+  mutate(
+    freeze_thaw = 
+      ifelse(min_temp_C < 0 & 
+               max_temp_C > 0,
+             1, 
+             0)
+    )
+```
+
+
 
 Save the file:
 
 ```{r}
-write_csv(sites_daymet, "./data/output/OSM_DAYMET_daily_site_covariates.csv")
+write_csv(sites_daymet, "./data/processed/OSM_DAYMET_daily_site_covariates.csv")
 ```
 
+We can re-load the file here so that we don't need to re-extract again (takes so long). All the code below processes the daily data into annual metrics. You could also write new code from this point that calculates new metrics from the raw data on a daily level.
+
+Loading the file below (the one we just saved) means we can use this point in the script as a check-point: 
+
 ```{r}
-sites_daymet <- read_csv("./data/output/OSM_DAYMET_daily_site_covariates.csv")
+sites_daymet <- read_csv("./data/processed/OSM_DAYMET_daily_site_covariates.csv")
 ```
 
 # 3. Let's format into some useful annual winter metrics. 
@@ -118,6 +134,9 @@ sites_daymet_annual <- sites_daymet %>%
   
   mutate(new_snow_water_equiv_kgM2 = snow_water_equiv_kgM2 - lag(snow_water_equiv_kgM2)) %>%
 
+  # Summarize will take the statistics across the whole group (i.e., winter year)
+  # IF you were to do the below code without grouping/summarizing, 
+  # you could go rowwise   # and get daily measurements like freeze/thaw).
   summarize(
     # -- TIMING --
     # which() ensures we safely ignore NA values while finding the index
@@ -236,7 +255,7 @@ sites_daymet_annual_final <- sites_daymet_avg5yr %>%
 Save the file. 
 
 ```{r}
-write_csv(sites_daymet_annual_final, "./data/output/OSM_DAYMET_annual_site_covariates.csv")
+write_csv(sites_daymet_annual_final, "./data/processed/OSM_DAYMET_annual_site_covariates.csv")
 ```
 
 
