@@ -47,3 +47,15 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# Exported images for the ACE lab data request
+/ACE_lab_black_bear_collars/images
+ACE_lab_black_bear_collars/images
+/ACME_lab_black_bear_collar_detections/
+*/ACME_lab_black_bear_collar_detections/
+/requests/ACE_lab_black_bear_collars/ACME_lab_black_bear_collar_detections/
+
+
+
+
+
